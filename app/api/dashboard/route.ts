@@ -55,11 +55,11 @@ function getRange(range: string) {
   };
 }
 
-/** Helper: count list members, returns 0 on error (so one bad list doesn't break the dashboard). */
-async function safeCount(listId: string, key: string, errors: any): Promise<number> {
-  if (!listId) return 0;
+/** Helper: count list-or-segment members, returns 0 on error. Tries list first, segment second. */
+async function safeCount(id: string, key: string, errors: any): Promise<number> {
+  if (!id) return 0;
   try {
-    return await klaviyo.countListMembers(listId);
+    return await klaviyo.countMembers(id);
   } catch (e: any) {
     errors[`klaviyo_${key}`] = e.message;
     return 0;
@@ -134,8 +134,9 @@ export async function GET(req: NextRequest) {
   const typeformPromise = (async () => {
     try {
       const count = await typeform.countResponses({
-        since: startISO.replace("T", " ").slice(0, 19),
-        until: endISO.replace("T", " ").slice(0, 19),
+        // Typeform wants ISO with T: 2024-01-01T00:00:00 (NO space)
+        since: startISO.slice(0, 19),
+        until: endISO.slice(0, 19),
       });
       out.typeform = { responses: count };
     } catch (e: any) {

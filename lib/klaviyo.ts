@@ -47,6 +47,30 @@ export async function countListMembers(listId: string): Promise<number> {
   return total;
 }
 
+/** Count profiles in a segment (paginated). Used as a fallback when /lists/ returns 404. */
+export async function countSegmentMembers(segmentId: string): Promise<number> {
+  let total = 0;
+  let next: string | null = `/segments/${segmentId}/profiles/?page[size]=100`;
+  while (next) {
+    const data: any = await get(next);
+    total += (data?.data?.length || 0) as number;
+    next = data?.links?.next || null;
+  }
+  return total;
+}
+
+/** Smart count: try list first, fall back to segment if the list 404s. */
+export async function countMembers(id: string): Promise<number> {
+  try {
+    return await countListMembers(id);
+  } catch (e: any) {
+    if (typeof e?.message === "string" && e.message.includes("404")) {
+      return await countSegmentMembers(id);
+    }
+    throw e;
+  }
+}
+
 /** Get profiles in a list with their custom properties (paginated). */
 export async function listProfiles(listId: string, max = 1000): Promise<any[]> {
   const out: any[] = [];
