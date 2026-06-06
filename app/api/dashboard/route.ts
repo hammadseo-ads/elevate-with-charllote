@@ -1,0 +1,154 @@
+/**
+ * Combined dashboard feed.
+ * GET /api/dashboard?range=daily|weekly|monthly|total
+ *
+ * Returns:
+ *   ga4:      { totals, bySource }
+ *   typeform: { responses }
+ *   funnel:   { visitors, quiz_submitters, quiz_finished, checkout_filled, buyers, revenue }
+ *   tiers:    { tier269, tier419, tier468, tier618, downsell199, late, friend }
+ *   errors:   { ... } when any source fails
+ */
+
+import { NextRequest, NextResponse } from "next/server";
+import * as klaviyo from "@/lib/klaviyo";
+import * as typeform from "@/lib/typeform";
+import * as ga4 from "@/lib/ga4";
+import { CONFIG } from "@/lib/config";
+
+export const dynamic = "force-dynamic";
+
+const LISTS  = CONFIG.klaviyo.lists;
+const PRICES = CONFIG.klaviyo.tierPrices;
+
+function getRange(range: string) {
+  const now = new Date();
+  const end = new Date(now);
+  let start: Date;
+  let label: string;
+
+  switch (range) {
+    case "daily":
+      start = new Date(now); start.setUTCHours(0, 0, 0, 0);
+      label = "Today";
+      break;
+    case "weekly":
+      start = new Date(now); start.setUTCDate(start.getUTCDate() - 7);
+      label = "Last 7 days";
+      break;
+    case "monthly":
+      start = new Date(now); start.setUTCDate(start.getUTCDate() - 30);
+      label = "Last 30 days";
+      break;
+    case "total":
+    default:
+      start = new Date("2024-01-01T00:00:00Z");
+      label = "All time";
+  }
+
+  return {
+    startISO: start.toISOString(),
+    endISO:   end.toISOString(),
+    ga4Start: start.toISOString().slice(0, 10),
+    ga4End:   end.toISOString().slice(0, 10),
+    label,
+  };
+}
+
+/** Helper: count list members, returns 0 on error (so one bad list doesn't break the dashboard). */
+async function safeCount(listId: string, key: string, errors: any): Promise<number> {
+  if (!listId) return 0;
+  try {
+    return await klaviyo.countListMembers(listId);
+  } catch (e: any) {
+    errors[`klaviyo_${key}`] = e.message;
+    return 0;
+  }
+}
+
+export async function GET(req: NextRequest) {
+  const range = req.nextUrl.searchParams.get("range") || "weekly";
+  const { startISO, endISO, ga4Start, ga4End, label } = getRange(range);
+
+  const out: any = {
+    range,
+    label,
+    ga4: null,
+    typeform: null,
+    funnel: null,
+    tiers: null,
+    errors: {},
+  };
+
+  // --- GA4 ----------------------------------------------------------
+  const ga4Promise = (async () => {
+    try {
+      const [totals, bySource] = await Promise.all([
+        ga4.totalsByRange(ga4Start, ga4End),
+        ga4.sessionsBySource(ga4Start, ga4End),
+      ]);
+      out.ga4 = { totals, bySource };
+    } catch (e: any) {
+      out.errors.ga4 = e.message;
+    }
+  })();
+
+  // --- Klaviyo lists -----------------------------------------------
+  // NOTE: Klaviyo list counts are CUMULATIVE (all-time) — they don't shrink
+  // when you switch to "Today / Weekly". Only GA4 + Typeform respect the range.
+  const klaviyoPromise = (async () => {
+    const errors = out.errors;
+    const tier269     = await safeCount(LISTS.buyer269,      "buyer_269",     errors);
+    const tier419     = await safeCount(LISTS.buyer419,      "buyer_419",     errors);
+    const tier468     = await safeCount(LISTS.buyer468,      "buyer_468",     errors);
+    const tier618     = await safeCount(LISTS.buyer618,      "buyer_618",     errors);
+    const downsell199 = await safeCount(LISTS.buyerDownsell, "buyer_downsell", errors);
+    const late        = await safeCount(LISTS.buyerLate,     "buyer_late",    errors);
+    const friend      = await safeCount(LISTS.friend,        "friend",        errors);
+
+    const quizSubmitters = await safeCount(LISTS.quizSubmitters, "quiz_submitters", errors);
+    const quizFinished   = await safeCount(LISTS.quizFinished,   "quiz_finished",   errors);
+    const checkoutFilled = await safeCount(LISTS.checkout,       "checkout",        errors);
+    const allBuyers      = await safeCount(LISTS.buyersAll,      "buyers_all",      errors);
+
+    const revenue =
+      tier269 * PRICES.tier269 +
+      tier419 * PRICES.tier419 +
+      tier468 * PRICES.tier468 +
+      tier618 * PRICES.tier618 +
+      downsell199 * PRICES.downsell199 +
+      late * PRICES.late495;
+
+    out.tiers = { tier269, tier419, tier468, tier618, downsell199, late, friend };
+    out.funnel = {
+      visitors:         null, // filled after GA4 promise resolves
+      quiz_submitters:  quizSubmitters,
+      quiz_finished:    quizFinished,
+      checkout_filled:  checkoutFilled,
+      buyers:           allBuyers || (tier269 + tier419 + tier468 + tier618 + downsell199 + late),
+      revenue,
+    };
+  })();
+
+  // --- Typeform ----------------------------------------------------
+  const typeformPromise = (async () => {
+    try {
+      const count = await typeform.countResponses({
+        since: startISO.replace("T", " ").slice(0, 19),
+        until: endISO.replace("T", " ").slice(0, 19),
+      });
+      out.typeform = { responses: count };
+    } catch (e: any) {
+      out.errors.typeform = e.message;
+    }
+  })();
+
+  await Promise.all([ga4Promise, klaviyoPromise, typeformPromise]);
+
+  // Stitch GA4 visitors into the funnel object now that both have resolved.
+  if (out.funnel && out.ga4?.totals?.users != null) {
+    out.funnel.visitors = out.ga4.totals.users;
+  }
+
+  return NextResponse.json(out);
+}
