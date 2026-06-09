@@ -108,6 +108,33 @@ export async function getMembers(id: string, max = 500): Promise<any[]> {
 }
 
 /**
+ * Get all events for a profile (Received Email, Started Checkout, Placed Order, etc).
+ * Returns events sorted most-recent-first + a map of metric_id -> metric_name
+ * so the UI can show human-readable event names.
+ */
+export async function getProfileEvents(
+  profileId: string,
+  max = 100
+): Promise<{ events: any[]; metrics: Record<string, string> }> {
+  const filter = `equals(profile_id,"${profileId}")`;
+  const url = `/events/?filter=${encodeURIComponent(filter)}&include=metric&sort=-datetime&page[size]=100`;
+  const data: any = await get(url);
+
+  const events: any[] = (data?.data || []).slice(0, max);
+
+  /* Build metric_id -> metric_name lookup from the included array */
+  const metrics: Record<string, string> = {};
+  const included = data?.included || [];
+  included.forEach((item: any) => {
+    if (item.type === "metric") {
+      metrics[item.id] = item.attributes?.name || "Unknown event";
+    }
+  });
+
+  return { events, metrics };
+}
+
+/**
  * Get events filtered by metric_id within a date range.
  * Useful for Placed Order, Started Checkout, etc.
  *

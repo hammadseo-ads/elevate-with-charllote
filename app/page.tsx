@@ -16,6 +16,12 @@ export default function DashboardPage() {
   const [profiles, setProfiles] = useState<any[] | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
 
+  /* Event-timeline sub-modal state */
+  const [eventProfile, setEventProfile] = useState<{ id: string; email: string } | null>(null);
+  const [events, setEvents] = useState<any[] | null>(null);
+  const [metrics, setMetrics] = useState<Record<string, string>>({});
+  const [eventsLoading, setEventsLoading] = useState(false);
+
   async function load() {
     setLoading(true);
     try {
@@ -37,12 +43,27 @@ export default function DashboardPage() {
       .finally(() => setDrillLoading(false));
   }, [drill]);
 
-  /* ESC closes drill-down. */
+  /* ESC closes whichever modal is open (events sub-modal first, then drill-down). */
   useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === "Escape") setDrill(null); }
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      if (eventProfile) { setEventProfile(null); return; }
+      if (drill)        { setDrill(null); }
+    }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [eventProfile, drill]);
+
+  /* Load events when a profile is selected for the timeline. */
+  useEffect(() => {
+    if (!eventProfile) { setEvents(null); setMetrics({}); return; }
+    setEventsLoading(true);
+    fetch(`/api/klaviyo/events?profileId=${eventProfile.id}&max=100`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => { setEvents(j.events || []); setMetrics(j.metrics || {}); })
+      .catch(() => setEvents([]))
+      .finally(() => setEventsLoading(false));
+  }, [eventProfile]);
 
   const f  = data?.funnel  || {};
   const t  = data?.tiers   || {};
@@ -210,6 +231,7 @@ export default function DashboardPage() {
                       <th className="p-3">Program</th>
                       <th className="p-3 text-right">Total</th>
                       <th className="p-3">Created</th>
+                      <th className="p-3 text-right">Events</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -225,6 +247,12 @@ export default function DashboardPage() {
                           <td className="p-3 text-xs">{props.program || "—"}</td>
                           <td className="p-3 text-right font-semibold">{props.total_usd ? `$${props.total_usd}` : "—"}</td>
                           <td className="p-3 text-xs">{a.created ? new Date(a.created).toLocaleDateString() : "—"}</td>
+                          <td className="p-3 text-right">
+                            <button onClick={() => setEventProfile({ id: p.id, email: a.email || "—" })}
+                              className="px-3 py-1 rounded-full bg-navy text-white text-xs font-semibold hover:opacity-90">
+                              View →
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
@@ -243,6 +271,72 @@ export default function DashboardPage() {
                   Export CSV
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EVENT TIMELINE SUB-MODAL */}
+      {eventProfile && (
+        <div className="fixed inset-0 z-[60] bg-black/70 flex items-start justify-center p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setEventProfile(null); }}>
+          <div className="bg-white rounded-2xl max-w-2xl w-full my-8 shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-teal text-white">
+              <div>
+                <h3 className="text-lg font-extrabold">Activity Timeline</h3>
+                <p className="text-xs text-white/80 mt-0.5 font-mono">{eventProfile.email}</p>
+              </div>
+              <button onClick={() => setEventProfile(null)}
+                className="w-10 h-10 rounded-full bg-white/15 hover:bg-white/30 text-xl">×</button>
+            </div>
+
+            <div className="overflow-auto" style={{ maxHeight: "70vh" }}>
+              {eventsLoading ? (
+                <div className="p-10 text-center text-muted">Loading events…</div>
+              ) : events && events.length > 0 ? (
+                <ul className="divide-y divide-gray-100">
+                  {events.map((ev: any) => {
+                    const a = ev?.attributes || {};
+                    const metricId = ev?.relationships?.metric?.data?.id;
+                    const metricName = (metricId && metrics[metricId]) || "Unknown event";
+                    const dt = a.datetime ? new Date(a.datetime) : null;
+                    const props = a.event_properties || {};
+                    const subject = props["Subject"] || props["subject"] || props["$message_name"] || "";
+                    const value = a.value || props.value;
+
+                    return (
+                      <li key={ev.id} className="p-4 hover:bg-gray-50">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-navy text-sm">{metricName}</div>
+                            {subject && (
+                              <div className="text-xs text-muted mt-0.5 truncate">{subject}</div>
+                            )}
+                            {value && (
+                              <div className="text-xs text-teal mt-0.5 font-semibold">${value}</div>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted whitespace-nowrap text-right">
+                            {dt ? (
+                              <>
+                                <div>{dt.toLocaleDateString()}</div>
+                                <div>{dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                              </>
+                            ) : "—"}
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <div className="p-10 text-center text-muted">No events recorded for this profile.</div>
+              )}
+            </div>
+
+            <div className="p-3 bg-gray-50 border-t border-gray-200 text-xs text-muted text-center">
+              {events && `Showing ${events.length} most recent events`}
+              {!events && !eventsLoading && "—"}
             </div>
           </div>
         </div>
