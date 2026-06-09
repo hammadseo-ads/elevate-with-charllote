@@ -11,6 +11,7 @@ export const CONFIG = {
       quizSubmitters:  "X2ib44",   // Reset Quiz Submitters
       quizFinished:    "SHXf9v",   // Quiz - Finished
       checkout:        "VgLXm8",   // Back in the Body Checkout Pop up
+      abandonedCart:   "TnSzYp",   // Back in the Body — Abandoned Cart
       friend:          "Y57czV",   // Back in the body buyer: Referred Friend
       buyersAll:       "XchbFC",   // Back in the Body Checkout - Any Buyers
       // Tier-specific buyer lists (for revenue calculation)

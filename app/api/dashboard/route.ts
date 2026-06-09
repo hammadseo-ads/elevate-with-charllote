@@ -109,6 +109,7 @@ export async function GET(req: NextRequest) {
     const quizSubmitters = await safeCount(LISTS.quizSubmitters, "quiz_submitters", errors);
     const quizFinished   = await safeCount(LISTS.quizFinished,   "quiz_finished",   errors);
     const checkoutFilled = await safeCount(LISTS.checkout,       "checkout",        errors);
+    const abandonedCart  = await safeCount(LISTS.abandonedCart,  "abandoned_cart",  errors);
     const allBuyers      = await safeCount(LISTS.buyersAll,      "buyers_all",      errors);
 
     const revenue =
@@ -125,8 +126,24 @@ export async function GET(req: NextRequest) {
       quiz_submitters:  quizSubmitters,
       quiz_finished:    quizFinished,
       checkout_filled:  checkoutFilled,
+      abandoned_cart:   abandonedCart,
       buyers:           allBuyers || (tier269 + tier419 + tier468 + tier618 + downsell199 + late),
       revenue,
+    };
+    /* Expose list IDs so the frontend knows what to fetch when a card is clicked. */
+    out.listIds = {
+      quiz_submitters: LISTS.quizSubmitters,
+      quiz_finished:   LISTS.quizFinished,
+      checkout_filled: LISTS.checkout,
+      abandoned_cart:  LISTS.abandonedCart,
+      buyers:          LISTS.buyersAll,
+      friend:          LISTS.friend,
+      tier269:         LISTS.buyer269,
+      tier419:         LISTS.buyer419,
+      tier468:         LISTS.buyer468,
+      tier618:         LISTS.buyer618,
+      downsell:        LISTS.buyerDownsell,
+      late:            LISTS.buyerLate,
     };
   })();
 

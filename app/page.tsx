@@ -4,10 +4,17 @@ import { useEffect, useState } from "react";
 
 type Range = "daily" | "weekly" | "monthly" | "total";
 
+type DrillDown = { listId: string; label: string } | null;
+
 export default function DashboardPage() {
   const [range, setRange] = useState<Range>("weekly");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+
+  /* Drill-down modal state */
+  const [drill, setDrill] = useState<DrillDown>(null);
+  const [profiles, setProfiles] = useState<any[] | null>(null);
+  const [drillLoading, setDrillLoading] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -15,37 +22,48 @@ export default function DashboardPage() {
       const res = await fetch(`/api/dashboard?range=${range}`, { cache: "no-store" });
       const json = await res.json();
       setData(json);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { console.error(e); } finally { setLoading(false); }
   }
-
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [range]);
 
-  const f = data?.funnel || {};
-  const t = data?.tiers  || {};
+  /* Load profiles when a drill-down is requested. */
+  useEffect(() => {
+    if (!drill) { setProfiles(null); return; }
+    setDrillLoading(true);
+    fetch(`/api/klaviyo/profiles?listId=${drill.listId}&max=500`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => setProfiles(j.profiles || []))
+      .catch(() => setProfiles([]))
+      .finally(() => setDrillLoading(false));
+  }, [drill]);
+
+  /* ESC closes drill-down. */
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") setDrill(null); }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const f  = data?.funnel  || {};
+  const t  = data?.tiers   || {};
+  const ids = data?.listIds || {};
 
   return (
     <main className="min-h-screen max-w-6xl mx-auto p-6">
       <header className="mb-6">
         <h1 className="text-3xl font-extrabold text-navy">Elevate Tracking Dashboard</h1>
         <p className="text-muted mt-1 text-sm">
-          Visitors (GA4) → Quiz → Checkout → Purchases (Klaviyo).
+          Visitors (GA4) → Quiz → Checkout → Purchases (Klaviyo). Click any Klaviyo card to see the actual list members.
         </p>
       </header>
 
       {/* Range tabs */}
       <div className="flex flex-wrap gap-2 mb-6 items-center">
         {(["daily", "weekly", "monthly", "total"] as Range[]).map((r) => (
-          <button
-            key={r}
-            onClick={() => setRange(r)}
+          <button key={r} onClick={() => setRange(r)}
             className={`px-4 py-2 rounded-full text-sm font-semibold transition ${
               range === r ? "bg-navy text-white" : "bg-white text-ink border border-gray-200 hover:bg-mint"
-            }`}
-          >
+            }`}>
             {r === "daily" ? "Today" : r === "weekly" ? "Last 7 days" : r === "monthly" ? "Last 30 days" : "All time"}
           </button>
         ))}
@@ -58,16 +76,22 @@ export default function DashboardPage() {
       {/* FUNNEL */}
       <section className="mb-8">
         <h2 className="text-sm uppercase tracking-wider text-muted font-bold mb-3">Acquisition Funnel</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
-          <FunnelStep label="Visitors"           value={f.visitors}        helper="GA4 (range-filtered)" />
-          <FunnelStep label="Quiz Submitters"    value={f.quiz_submitters} helper="Klaviyo (all-time)" />
-          <FunnelStep label="Quiz Finished"      value={f.quiz_finished}   helper="Klaviyo (all-time)" />
-          <FunnelStep label="Checkout Filled"    value={f.checkout_filled} helper="Klaviyo (all-time)" />
-          <FunnelStep label="Purchases"          value={f.buyers}          helper="Klaviyo (all-time)" highlight />
-          <FunnelStep label="Revenue"            value={f.revenue}         prefix="$" helper="Tier sum (all-time)" highlight />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
+          <FunnelStep label="Visitors"        value={f.visitors}        helper="GA4 (range-filtered)" />
+          <FunnelStep label="Quiz Submitters" value={f.quiz_submitters} helper="Click to view"
+            onClick={() => setDrill({ listId: ids.quiz_submitters, label: "Quiz Submitters" })} />
+          <FunnelStep label="Quiz Finished"   value={f.quiz_finished}   helper="Click to view"
+            onClick={() => setDrill({ listId: ids.quiz_finished, label: "Quiz Finished" })} />
+          <FunnelStep label="Checkout Filled" value={f.checkout_filled} helper="Click to view"
+            onClick={() => setDrill({ listId: ids.checkout_filled, label: "Checkout Filled" })} />
+          <FunnelStep label="Abandoned Cart"  value={f.abandoned_cart}  helper="Click to view"
+            onClick={() => setDrill({ listId: ids.abandoned_cart, label: "Abandoned Cart" })} />
+          <FunnelStep label="Purchases"       value={f.buyers}          helper="Click to view" highlight
+            onClick={() => setDrill({ listId: ids.buyers, label: "Purchases (All Buyers)" })} />
+          <FunnelStep label="Revenue"         value={f.revenue}         prefix="$" helper="Tier sum" highlight />
         </div>
         <p className="text-xs text-muted mt-2">
-          Note: Klaviyo list counts are cumulative — they don't shrink when you switch to "Today / Weekly". Only GA4 and Typeform respect the range.
+          Klaviyo list counts are cumulative (all-time). Only GA4 and Typeform respect the date range.
         </p>
       </section>
 
@@ -75,13 +99,20 @@ export default function DashboardPage() {
       <section className="mb-8">
         <h2 className="text-sm uppercase tracking-wider text-muted font-bold mb-3">Buyers by Tier</h2>
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-          <Kpi label="$269 Basic"    value={t.tier269}     accent="bg-mint" />
-          <Kpi label="$419 VIP"      value={t.tier419}     accent="bg-mint" />
-          <Kpi label="$468 +Friend"  value={t.tier468}     accent="bg-mint" />
-          <Kpi label="$618 VIP+Fr."  value={t.tier618}     accent="bg-mint" />
-          <Kpi label="$199 Downsell" value={t.downsell199} accent="bg-cream" />
-          <Kpi label="$495 Late"     value={t.late}        accent="bg-cream" />
-          <Kpi label="Friend Refs"   value={t.friend}      accent="bg-cream" />
+          <Kpi label="$269 Basic"    value={t.tier269}     accent="bg-mint"
+            onClick={() => ids.tier269 && setDrill({ listId: ids.tier269, label: "$269 Basic Buyers" })} />
+          <Kpi label="$419 VIP"      value={t.tier419}     accent="bg-mint"
+            onClick={() => ids.tier419 && setDrill({ listId: ids.tier419, label: "$419 VIP Buyers" })} />
+          <Kpi label="$468 +Friend"  value={t.tier468}     accent="bg-mint"
+            onClick={() => ids.tier468 && setDrill({ listId: ids.tier468, label: "$468 +Friend Buyers" })} />
+          <Kpi label="$618 VIP+Fr."  value={t.tier618}     accent="bg-mint"
+            onClick={() => ids.tier618 && setDrill({ listId: ids.tier618, label: "$618 VIP+Friend Buyers" })} />
+          <Kpi label="$199 Downsell" value={t.downsell199} accent="bg-cream"
+            onClick={() => ids.downsell && setDrill({ listId: ids.downsell, label: "$199 Downsell Buyers" })} />
+          <Kpi label="$495 Late"     value={t.late}        accent="bg-cream"
+            onClick={() => ids.late && setDrill({ listId: ids.late, label: "$495 Late Buyers" })} />
+          <Kpi label="Friend Refs"   value={t.friend}      accent="bg-cream"
+            onClick={() => ids.friend && setDrill({ listId: ids.friend, label: "Friend Referrals" })} />
         </div>
       </section>
 
@@ -147,16 +178,115 @@ export default function DashboardPage() {
       <footer className="mt-10 text-xs text-muted text-center">
         Range: <span className="font-mono">{data?.label || "—"}</span>
       </footer>
+
+      {/* DRILL-DOWN MODAL */}
+      {drill && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center p-4 overflow-y-auto"
+          onClick={(e) => { if (e.target === e.currentTarget) setDrill(null); }}>
+          <div className="bg-white rounded-2xl max-w-5xl w-full my-8 shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-navy text-white">
+              <div>
+                <h3 className="text-lg font-extrabold">{drill.label}</h3>
+                <p className="text-xs text-white/70 mt-0.5">
+                  List ID: <code className="font-mono">{drill.listId}</code>
+                  {profiles && ` · ${profiles.length} profiles shown (max 500)`}
+                </p>
+              </div>
+              <button onClick={() => setDrill(null)}
+                className="w-10 h-10 rounded-full bg-white/15 hover:bg-white/30 text-xl">×</button>
+            </div>
+
+            <div className="overflow-auto" style={{ maxHeight: "70vh" }}>
+              {drillLoading ? (
+                <div className="p-10 text-center text-muted">Loading profiles…</div>
+              ) : profiles && profiles.length > 0 ? (
+                <table className="w-full text-sm">
+                  <thead className="bg-mint sticky top-0">
+                    <tr className="text-left text-muted">
+                      <th className="p-3">Email</th>
+                      <th className="p-3">Name</th>
+                      <th className="p-3">Source</th>
+                      <th className="p-3">Campaign</th>
+                      <th className="p-3">Program</th>
+                      <th className="p-3 text-right">Total</th>
+                      <th className="p-3">Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {profiles.map((p: any, i: number) => {
+                      const a = p?.attributes || {};
+                      const props = a?.properties || {};
+                      return (
+                        <tr key={p.id || i} className="border-t border-gray-100 hover:bg-gray-50">
+                          <td className="p-3 font-mono text-xs">{a.email || "—"}</td>
+                          <td className="p-3">{[a.first_name, a.last_name].filter(Boolean).join(" ") || "—"}</td>
+                          <td className="p-3 text-xs">{props.first_utm_source || props.utm_source || "—"}</td>
+                          <td className="p-3 text-xs">{props.first_utm_campaign || props.utm_campaign || "—"}</td>
+                          <td className="p-3 text-xs">{props.program || "—"}</td>
+                          <td className="p-3 text-right font-semibold">{props.total_usd ? `$${props.total_usd}` : "—"}</td>
+                          <td className="p-3 text-xs">{a.created ? new Date(a.created).toLocaleDateString() : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="p-10 text-center text-muted">No profiles in this list.</div>
+              )}
+            </div>
+
+            <div className="p-3 bg-gray-50 border-t border-gray-200 text-xs text-muted flex items-center justify-between">
+              <span>Click outside or press ESC to close</span>
+              {profiles && profiles.length > 0 && (
+                <button onClick={() => exportCsv(drill.label, profiles)}
+                  className="px-3 py-1.5 rounded-full bg-teal text-white text-xs font-semibold hover:opacity-90">
+                  Export CSV
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
 
-function FunnelStep({ label, value, helper, prefix, highlight }: any) {
-  const display = value === undefined || value === null
-    ? "—"
-    : `${prefix || ""}${Number(value).toLocaleString()}`;
+/* CSV export helper. */
+function exportCsv(label: string, profiles: any[]) {
+  const rows = [
+    ["email", "first_name", "last_name", "utm_source", "utm_campaign", "program", "vip", "bring_a_friend", "total_usd", "created"],
+    ...profiles.map((p: any) => {
+      const a = p?.attributes || {};
+      const props = a?.properties || {};
+      return [
+        a.email || "",
+        a.first_name || "",
+        a.last_name || "",
+        props.first_utm_source || props.utm_source || "",
+        props.first_utm_campaign || props.utm_campaign || "",
+        props.program || "",
+        props.vip ?? "",
+        props.bring_a_friend ?? "",
+        props.total_usd ?? "",
+        a.created || "",
+      ];
+    }),
+  ];
+  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function FunnelStep({ label, value, helper, prefix, highlight, onClick }: any) {
+  const display = value == null ? "—" : `${prefix || ""}${Number(value).toLocaleString()}`;
+  const base = `rounded-2xl border p-4 transition ${highlight ? "bg-navy text-white border-navy" : "bg-white border-gray-200"}`;
+  const clickable = onClick ? "cursor-pointer hover:shadow-lg hover:-translate-y-0.5" : "";
   return (
-    <div className={`rounded-2xl border p-4 ${highlight ? "bg-navy text-white border-navy" : "bg-white border-gray-200"}`}>
+    <div className={`${base} ${clickable}`} onClick={onClick}>
       <div className={`text-[11px] uppercase tracking-wider font-bold ${highlight ? "text-white/70" : "text-muted"}`}>{label}</div>
       <div className={`text-2xl font-extrabold mt-1 ${highlight ? "text-white" : "text-navy"}`}>{display}</div>
       {helper && <div className={`text-[10px] mt-1 ${highlight ? "text-white/60" : "text-muted"}`}>{helper}</div>}
@@ -164,12 +294,14 @@ function FunnelStep({ label, value, helper, prefix, highlight }: any) {
   );
 }
 
-function Kpi({ label, value, prefix, helper, accent }: any) {
-  const display = value === undefined || value === null
+function Kpi({ label, value, prefix, helper, accent, onClick }: any) {
+  const display = value == null
     ? "—"
     : (typeof value === "number" ? `${prefix || ""}${value.toLocaleString()}` : `${prefix || ""}${value}`);
+  const base = `rounded-2xl border border-gray-200 p-3 ${accent || "bg-white"}`;
+  const clickable = onClick ? "cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition" : "";
   return (
-    <div className={`rounded-2xl border border-gray-200 p-3 ${accent || "bg-white"}`}>
+    <div className={`${base} ${clickable}`} onClick={onClick}>
       <div className="text-[11px] uppercase tracking-wider text-muted font-semibold">{label}</div>
       <div className="text-xl font-extrabold text-navy mt-1">{display}</div>
       {helper && <div className="text-[10px] text-muted mt-1">{helper}</div>}
