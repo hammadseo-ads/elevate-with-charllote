@@ -95,6 +95,18 @@ export async function segmentProfiles(segmentId: string, max = 1000): Promise<an
   return out;
 }
 
+/** Smart fetch: try list first, fall back to segment if the list 404s. */
+export async function getMembers(id: string, max = 500): Promise<any[]> {
+  try {
+    return await listProfiles(id, max);
+  } catch (e: any) {
+    if (typeof e?.message === "string" && e.message.includes("404")) {
+      return await segmentProfiles(id, max);
+    }
+    throw e;
+  }
+}
+
 /**
  * Get events filtered by metric_id within a date range.
  * Useful for Placed Order, Started Checkout, etc.
