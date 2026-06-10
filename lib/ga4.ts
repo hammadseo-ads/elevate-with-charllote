@@ -2,44 +2,77 @@
  * Google Analytics 4 Data API client.
  * Docs: https://developers.google.com/analytics/devguides/reporting/data/v1/rest
  *
- * Auth: service account with "Viewer" role on the GA4 property.
+ * Auth (priority order):
+ *   1. OAuth 2.0 user credentials (PRIMARY — works around Google's April-2026
+ *      bug that blocks new service accounts from being added to GA4 properties).
+ *      Requires three env vars: GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET,
+ *      GOOGLE_OAUTH_REFRESH_TOKEN. The refresh token is obtained ONCE via
+ *      https://developers.google.com/oauthplayground with scope
+ *      https://www.googleapis.com/auth/analytics.readonly.
  *
- * Supports TWO ways to provide credentials:
- *   1. GA4_SERVICE_ACCOUNT_FILE  = path to the downloaded JSON key file (easiest local)
- *   2. GA4_SERVICE_ACCOUNT_JSON  = JSON content as a single-line string (best for Vercel)
- *
- * The file path is checked first. Use the env-string approach for production deploys.
+ *   2. Service account JSON (FALLBACK — will work again once Google fixes the bug):
+ *      a. GA4_SERVICE_ACCOUNT_FILE       — path to JSON key file (local dev)
+ *      b. GA4_SERVICE_ACCOUNT_JSON_B64   — base64-encoded JSON (good for Vercel)
+ *      c. GA4_SERVICE_ACCOUNT_JSON       — raw JSON string
  */
 
 import { BetaAnalyticsDataClient } from "@google-analytics/data";
+import { OAuth2Client } from "google-auth-library";
 import fs from "node:fs";
 import path from "node:path";
 import { CONFIG } from "./config";
 
 let clientCache: BetaAnalyticsDataClient | null = null;
 
-function loadCredentials() {
-  // Priority 1: file path (local dev only — file is .gitignored)
+/** Build an OAuth2Client from env vars, or null if any are missing. */
+function buildOAuthClient(): OAuth2Client | null {
+  const clientId     = process.env.GOOGLE_OAUTH_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_OAUTH_REFRESH_TOKEN;
+  if (!clientId || !clientSecret || !refreshToken) return null;
+
+  const oauth = new OAuth2Client({ clientId, clientSecret });
+  oauth.setCredentials({ refresh_token: refreshToken });
+  return oauth;
+}
+
+/** Load service-account credentials from any of the supported env vars. */
+function loadServiceAccountCredentials(): any | null {
   const filePath = process.env.GA4_SERVICE_ACCOUNT_FILE;
   if (filePath) {
     const abs = path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
     if (!fs.existsSync(abs)) throw new Error(`GA4_SERVICE_ACCOUNT_FILE missing: ${abs}`);
     return JSON.parse(fs.readFileSync(abs, "utf-8"));
   }
-  // Priority 2: base64-encoded JSON (best for Vercel — paste a single string with no newlines)
   const b64 = process.env.GA4_SERVICE_ACCOUNT_JSON_B64;
   if (b64) return JSON.parse(Buffer.from(b64, "base64").toString("utf-8"));
-  // Priority 3: raw JSON string in env
   const json = process.env.GA4_SERVICE_ACCOUNT_JSON;
   if (json) return JSON.parse(json);
-  throw new Error("Provide one of GA4_SERVICE_ACCOUNT_FILE / _B64 / _JSON in env");
+  return null;
 }
 
 function getClient(): BetaAnalyticsDataClient {
   if (clientCache) return clientCache;
-  const credentials = loadCredentials();
-  clientCache = new BetaAnalyticsDataClient({ credentials });
-  return clientCache;
+
+  // Priority 1: OAuth 2.0 (preferred — service-account add is broken in GA4 UI since April 2026)
+  const oauth = buildOAuthClient();
+  if (oauth) {
+    clientCache = new BetaAnalyticsDataClient({ authClient: oauth as any });
+    return clientCache;
+  }
+
+  // Priority 2: service-account fallback
+  const credentials = loadServiceAccountCredentials();
+  if (credentials) {
+    clientCache = new BetaAnalyticsDataClient({ credentials });
+    return clientCache;
+  }
+
+  throw new Error(
+    "GA4 auth not configured. Provide either OAuth env vars " +
+    "(GOOGLE_OAUTH_CLIENT_ID + GOOGLE_OAUTH_CLIENT_SECRET + GOOGLE_OAUTH_REFRESH_TOKEN) " +
+    "or a service-account file/JSON env var."
+  );
 }
 
 function propertyPath(): string {
