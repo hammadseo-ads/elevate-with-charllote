@@ -79,12 +79,29 @@ function propertyPath(): string {
   return `properties/${CONFIG.ga4.propertyId}`;
 }
 
+/**
+ * Build a GA4 dimensionFilter that restricts results to the landing pages
+ * configured in CONFIG.ga4.landingPages. Uses pagePath + inListFilter (OR).
+ * Returns undefined if no pages are configured (fall back to whole site).
+ */
+function landingPageFilter() {
+  const pages = CONFIG.ga4.landingPages || [];
+  if (!pages.length) return undefined;
+  return {
+    filter: {
+      fieldName: "pagePath",
+      inListFilter: { values: pages },
+    },
+  };
+}
+
 /** Run a custom GA4 report. */
 export async function runReport(body: {
   dateRanges: { startDate: string; endDate: string }[];
   dimensions?: { name: string }[];
   metrics?: { name: string }[];
   limit?: number;
+  dimensionFilter?: any;
 }) {
   const client = getClient();
   const [res] = await client.runReport({
@@ -94,11 +111,16 @@ export async function runReport(body: {
   return res;
 }
 
-/** Total sessions + users in the given date range. */
+/**
+ * Total sessions + users + pageviews — RESTRICTED to the landing pages
+ * configured in CONFIG.ga4.landingPages. So "visitors" on the dashboard
+ * means "people who actually saw one of our landing pages", not site-wide.
+ */
 export async function totalsByRange(startDate: string, endDate: string) {
   const res = await runReport({
     dateRanges: [{ startDate, endDate }],
     metrics: [{ name: "sessions" }, { name: "totalUsers" }, { name: "screenPageViews" }],
+    dimensionFilter: landingPageFilter(),
   });
   const row = res.rows?.[0];
   return {
@@ -108,7 +130,11 @@ export async function totalsByRange(startDate: string, endDate: string) {
   };
 }
 
-/** Sessions broken down by traffic source (utm_source/medium/campaign). */
+/**
+ * Sessions broken down by traffic source (utm_source/medium/campaign).
+ * Also restricted to the configured landing pages — so the table answers
+ * "how did people FIND our landing pages" not "how did people find the site".
+ */
 export async function sessionsBySource(startDate: string, endDate: string) {
   const res = await runReport({
     dateRanges: [{ startDate, endDate }],
@@ -119,6 +145,7 @@ export async function sessionsBySource(startDate: string, endDate: string) {
     ],
     metrics: [{ name: "sessions" }, { name: "totalUsers" }],
     limit: 100,
+    dimensionFilter: landingPageFilter(),
   });
 
   return (res.rows || []).map((r) => ({

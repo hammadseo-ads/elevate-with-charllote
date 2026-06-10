@@ -39,5 +39,15 @@ export const CONFIG = {
 
   ga4: {
     propertyId: "522083775",   // Elevatewithcharlotte
+    /**
+     * Restrict the dashboard's GA4 numbers (visitors + traffic source) to ONLY
+     * sessions that hit one of these landing pages. Use pagePath (no domain,
+     * no query string) — GA4 stores it exactly like the browser URL after the
+     * domain. Trailing slash MUST match what GA4 sees.
+     */
+    landingPages: [
+      "/back-in-the-body-in-8-weeks/",
+      "/back-in-the-body-in-8/",
+    ],
   },
 };
