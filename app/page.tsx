@@ -7,11 +7,30 @@ type Range = "daily" | "weekly" | "monthly" | "total";
 type DrillDown = { listId: string; label: string } | null;
 type LandingPage = { path: string; label: string };
 
+/** localStorage key for the in-browser cache. Bump suffix to invalidate. */
+const CACHE_KEY = "ewp-dashboard-cache-v1";
+const cacheId = (range: string, page: string) => `${range}::${page}`;
+
+type CacheEntry = { fetchedAt: number; payload: any };
+type Cache = Record<string, CacheEntry>;
+
+function readCache(): Cache {
+  if (typeof window === "undefined") return {};
+  try { return JSON.parse(localStorage.getItem(CACHE_KEY) || "{}"); }
+  catch { return {}; }
+}
+function writeCache(c: Cache) {
+  if (typeof window === "undefined") return;
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify(c)); } catch { /* quota */ }
+}
+
 export default function DashboardPage() {
   const [range, setRange] = useState<Range>("weekly");
   const [page, setPage] = useState<string>("all");     // "all" or a specific pagePath
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [cache, setCache] = useState<Cache>({});       // hydrated from localStorage on mount
+  const [lastFetched, setLastFetched] = useState<number | null>(null);
 
   /* Drill-down modal state */
   const [drill, setDrill] = useState<DrillDown>(null);
@@ -24,16 +43,94 @@ export default function DashboardPage() {
   const [metrics, setMetrics] = useState<Record<string, string>>({});
   const [eventsLoading, setEventsLoading] = useState(false);
 
-  async function load() {
+  /** One network call for a (range, page) combo. */
+  async function fetchOne(rangeArg: string, pageArg: string): Promise<any> {
+    const url = `/api/dashboard?range=${rangeArg}&page=${encodeURIComponent(pageArg)}`;
+    const res = await fetch(url, { cache: "no-store" });
+    return res.json();
+  }
+
+  /**
+   * Render the right data for the current (range, page).
+   * - Cache HIT  → instant, no network call.
+   * - Cache MISS → fetch just that one combo, store it.
+   * Used on range/page button clicks.
+   */
+  async function loadFromCacheOrFetch() {
+    const key = cacheId(range, page);
+    const hit = cache[key];
+    if (hit) {
+      setData(hit.payload);
+      setLastFetched(hit.fetchedAt);
+      return;
+    }
     setLoading(true);
     try {
-      const url = `/api/dashboard?range=${range}&page=${encodeURIComponent(page)}`;
-      const res = await fetch(url, { cache: "no-store" });
-      const json = await res.json();
-      setData(json);
-    } catch (e) { console.error(e); } finally { setLoading(false); }
+      const payload = await fetchOne(range, page);
+      const next = { ...cache, [key]: { fetchedAt: Date.now(), payload } };
+      setCache(next);
+      writeCache(next);
+      setData(payload);
+      setLastFetched(Date.now());
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
   }
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [range, page]);
+
+  /**
+   * Full reload for the CURRENT range: fetch "all" + every configured landing
+   * page in parallel, overwrite cache for those keys. Fired by the Refresh
+   * button. Uses landingPages from whichever payload we already have (cache
+   * or live) so we know what pages exist without hardcoding them.
+   */
+  async function refreshAll() {
+    setLoading(true);
+    try {
+      /* Make sure we have the landingPages list first. */
+      let landing: LandingPage[] = data?.landingPages || [];
+      if (!landing.length) {
+        const first = await fetchOne(range, "all");
+        landing = first.landingPages || [];
+        const next = { ...cache, [cacheId(range, "all")]: { fetchedAt: Date.now(), payload: first } };
+        setCache(next); writeCache(next);
+      }
+      /* Now fetch "all" + each page in parallel for the current range. */
+      const pageOptions = ["all", ...landing.map((p) => p.path)];
+      const payloads = await Promise.all(pageOptions.map((p) => fetchOne(range, p)));
+      const now = Date.now();
+      const next = { ...cache };
+      pageOptions.forEach((p, i) => {
+        next[cacheId(range, p)] = { fetchedAt: now, payload: payloads[i] };
+      });
+      setCache(next);
+      writeCache(next);
+      /* Re-render the currently selected combo from the fresh cache. */
+      const current = next[cacheId(range, page)];
+      if (current) {
+        setData(current.payload);
+        setLastFetched(current.fetchedAt);
+      }
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  }
+
+  /* Hydrate cache from localStorage on first mount. */
+  useEffect(() => {
+    const stored = readCache();
+    setCache(stored);
+    /* If we already have current combo cached, render instantly. */
+    const hit = stored[cacheId(range, page)];
+    if (hit) { setData(hit.payload); setLastFetched(hit.fetchedAt); }
+    else     { loadFromCacheOrFetch(); }     /* first-time visitor → fetch */
+    /* eslint-disable-next-line */
+  }, []);
+
+  /* On range/page change: cache hit = instant, miss = fetch. */
+  useEffect(() => {
+    /* Skip the very first run (handled by the mount effect above). */
+    if (Object.keys(cache).length === 0) return;
+    loadFromCacheOrFetch();
+    /* eslint-disable-next-line */
+  }, [range, page]);
 
   /* Load profiles when a drill-down is requested. */
   useEffect(() => {
@@ -91,10 +188,17 @@ export default function DashboardPage() {
             {r === "daily" ? "Today" : r === "weekly" ? "Last 7 days" : r === "monthly" ? "Last 30 days" : "All time"}
           </button>
         ))}
-        <button onClick={load} disabled={loading}
-          className="ml-auto px-4 py-2 rounded-full text-sm font-semibold bg-teal text-white hover:opacity-90 disabled:opacity-50">
-          {loading ? "Loading…" : "Refresh"}
-        </button>
+        <div className="ml-auto flex items-center gap-3">
+          {lastFetched && (
+            <span className="text-[11px] text-muted font-mono">
+              Cached {Math.floor((Date.now() - lastFetched) / 60000)}m ago
+            </span>
+          )}
+          <button onClick={refreshAll} disabled={loading}
+            className="px-4 py-2 rounded-full text-sm font-semibold bg-teal text-white hover:opacity-90 disabled:opacity-50">
+            {loading ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {/* Landing-page picker — filters the GA4 Visitors KPI + Traffic Source table */}
