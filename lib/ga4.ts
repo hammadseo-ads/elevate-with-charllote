@@ -80,12 +80,15 @@ function propertyPath(): string {
 }
 
 /**
- * Build a GA4 dimensionFilter that restricts results to the landing pages
- * configured in CONFIG.ga4.landingPages. Uses pagePath + inListFilter (OR).
- * Returns undefined if no pages are configured (fall back to whole site).
+ * Build a GA4 dimensionFilter restricting results to one or more landing pages.
+ *
+ * @param pagesOverride  Optional array of page paths to use instead of the full
+ *                       list from CONFIG. Pass a single-element array to filter
+ *                       to one specific page. Pass undefined to use all
+ *                       configured landing pages.
  */
-function landingPageFilter() {
-  const pages = CONFIG.ga4.landingPages || [];
+function landingPageFilter(pagesOverride?: string[]) {
+  const pages = pagesOverride ?? (CONFIG.ga4.landingPages || []).map((p) => p.path);
   if (!pages.length) return undefined;
   return {
     filter: {
@@ -112,15 +115,14 @@ export async function runReport(body: {
 }
 
 /**
- * Total sessions + users + pageviews — RESTRICTED to the landing pages
- * configured in CONFIG.ga4.landingPages. So "visitors" on the dashboard
- * means "people who actually saw one of our landing pages", not site-wide.
+ * Total sessions + users + pageviews — restricted to the given landing pages
+ * (or all configured pages if `pages` is omitted).
  */
-export async function totalsByRange(startDate: string, endDate: string) {
+export async function totalsByRange(startDate: string, endDate: string, pages?: string[]) {
   const res = await runReport({
     dateRanges: [{ startDate, endDate }],
     metrics: [{ name: "sessions" }, { name: "totalUsers" }, { name: "screenPageViews" }],
-    dimensionFilter: landingPageFilter(),
+    dimensionFilter: landingPageFilter(pages),
   });
   const row = res.rows?.[0];
   return {
@@ -131,11 +133,11 @@ export async function totalsByRange(startDate: string, endDate: string) {
 }
 
 /**
- * Sessions broken down by traffic source (utm_source/medium/campaign).
- * Also restricted to the configured landing pages — so the table answers
- * "how did people FIND our landing pages" not "how did people find the site".
+ * Sessions broken down by traffic source — restricted to the given landing
+ * pages (or all configured pages if `pages` is omitted). Answers "how did
+ * people find THIS page", not "how did people find the whole site".
  */
-export async function sessionsBySource(startDate: string, endDate: string) {
+export async function sessionsBySource(startDate: string, endDate: string, pages?: string[]) {
   const res = await runReport({
     dateRanges: [{ startDate, endDate }],
     dimensions: [
@@ -145,7 +147,7 @@ export async function sessionsBySource(startDate: string, endDate: string) {
     ],
     metrics: [{ name: "sessions" }, { name: "totalUsers" }],
     limit: 100,
-    dimensionFilter: landingPageFilter(),
+    dimensionFilter: landingPageFilter(pages),
   });
 
   return (res.rows || []).map((r) => ({

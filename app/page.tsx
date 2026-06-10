@@ -5,9 +5,11 @@ import { useEffect, useState } from "react";
 type Range = "daily" | "weekly" | "monthly" | "total";
 
 type DrillDown = { listId: string; label: string } | null;
+type LandingPage = { path: string; label: string };
 
 export default function DashboardPage() {
   const [range, setRange] = useState<Range>("weekly");
+  const [page, setPage] = useState<string>("all");     // "all" or a specific pagePath
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
@@ -25,12 +27,13 @@ export default function DashboardPage() {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch(`/api/dashboard?range=${range}`, { cache: "no-store" });
+      const url = `/api/dashboard?range=${range}&page=${encodeURIComponent(page)}`;
+      const res = await fetch(url, { cache: "no-store" });
       const json = await res.json();
       setData(json);
     } catch (e) { console.error(e); } finally { setLoading(false); }
   }
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [range]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [range, page]);
 
   /* Load profiles when a drill-down is requested. */
   useEffect(() => {
@@ -79,7 +82,7 @@ export default function DashboardPage() {
       </header>
 
       {/* Range tabs */}
-      <div className="flex flex-wrap gap-2 mb-6 items-center">
+      <div className="flex flex-wrap gap-2 mb-3 items-center">
         {(["daily", "weekly", "monthly", "total"] as Range[]).map((r) => (
           <button key={r} onClick={() => setRange(r)}
             className={`px-4 py-2 rounded-full text-sm font-semibold transition ${
@@ -92,6 +95,29 @@ export default function DashboardPage() {
           className="ml-auto px-4 py-2 rounded-full text-sm font-semibold bg-teal text-white hover:opacity-90 disabled:opacity-50">
           {loading ? "Loading…" : "Refresh"}
         </button>
+      </div>
+
+      {/* Landing-page picker — filters the GA4 Visitors KPI + Traffic Source table */}
+      <div className="flex flex-wrap gap-2 mb-6 items-center">
+        <span className="text-xs uppercase tracking-wider text-muted font-bold mr-1">GA4 page:</span>
+        <button onClick={() => setPage("all")}
+          className={`px-3 py-1.5 rounded-full text-xs font-semibold transition ${
+            page === "all" ? "bg-teal text-white" : "bg-white text-ink border border-gray-200 hover:bg-mint"
+          }`}>
+          Both pages
+        </button>
+        {((data?.landingPages || []) as LandingPage[]).map((lp) => (
+          <button key={lp.path} onClick={() => setPage(lp.path)}
+            title={lp.path}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold transition ${
+              page === lp.path ? "bg-teal text-white" : "bg-white text-ink border border-gray-200 hover:bg-mint"
+            }`}>
+            {lp.label}
+          </button>
+        ))}
+        {page !== "all" && (
+          <span className="text-[11px] text-muted font-mono ml-1">{page}</span>
+        )}
       </div>
 
       {/* FUNNEL */}

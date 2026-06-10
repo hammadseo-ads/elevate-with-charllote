@@ -68,11 +68,24 @@ async function safeCount(id: string, key: string, errors: any): Promise<number> 
 
 export async function GET(req: NextRequest) {
   const range = req.nextUrl.searchParams.get("range") || "weekly";
+  /**
+   * page param controls the GA4 page filter:
+   *   - "all" (default) → use all CONFIG.ga4.landingPages
+   *   - any configured pagePath (URL-decoded) → filter to just that one page
+   * Unknown values fall back to "all" so the dashboard never blows up.
+   */
+  const pageParam   = req.nextUrl.searchParams.get("page") || "all";
+  const allLanding  = CONFIG.ga4.landingPages.map((p) => p.path);
+  const ga4Pages    = pageParam === "all" || !allLanding.includes(pageParam)
+                       ? undefined        // undefined = use all configured pages
+                       : [pageParam];     // single-page filter
   const { startISO, endISO, ga4Start, ga4End, label } = getRange(range);
 
   const out: any = {
     range,
     label,
+    page: ga4Pages ? ga4Pages[0] : "all",
+    landingPages: CONFIG.ga4.landingPages,   // expose to UI so it can render the picker
     ga4: null,
     typeform: null,
     funnel: null,
@@ -84,8 +97,8 @@ export async function GET(req: NextRequest) {
   const ga4Promise = (async () => {
     try {
       const [totals, bySource] = await Promise.all([
-        ga4.totalsByRange(ga4Start, ga4End),
-        ga4.sessionsBySource(ga4Start, ga4End),
+        ga4.totalsByRange(ga4Start, ga4End, ga4Pages),
+        ga4.sessionsBySource(ga4Start, ga4End, ga4Pages),
       ]);
       out.ga4 = { totals, bySource };
     } catch (e: any) {

@@ -41,13 +41,16 @@ export const CONFIG = {
     propertyId: "522083775",   // Elevatewithcharlotte
     /**
      * Restrict the dashboard's GA4 numbers (visitors + traffic source) to ONLY
-     * sessions that hit one of these landing pages. Use pagePath (no domain,
-     * no query string) — GA4 stores it exactly like the browser URL after the
-     * domain. Trailing slash MUST match what GA4 sees.
+     * sessions that hit one of these landing pages. The dashboard UI shows a
+     * picker built from this list so the user can filter to one page at a time.
+     *
+     * - path: GA4 pagePath (no domain, no query string). Trailing slash MUST
+     *         match what GA4 sees, otherwise the filter returns zero.
+     * - label: short display name for the picker button (keep under ~16 chars).
      */
     landingPages: [
-      "/back-in-the-body-in-8-weeks/",
-      "/back-in-the-body-in-8/",
+      { path: "/back-in-the-body-in-8-weeks/", label: "8-Weeks Page" },
+      { path: "/back-in-the-body-in-8/",       label: "Short Page"   },
     ],
   },
 };
