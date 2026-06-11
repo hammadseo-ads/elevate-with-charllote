@@ -80,15 +80,20 @@ export default function DashboardPage() {
   }
 
   /**
-   * Full reload for the CURRENT range: fetch "all" + every configured landing
-   * page in parallel, overwrite cache for those keys. Fired by the Refresh
-   * button. Uses landingPages from whichever payload we already have (cache
-   * or live) so we know what pages exist without hardcoding them.
+   * Full reload for the CURRENT range: invalidate the SERVER cache first
+   * (POST /api/dashboard/refresh), then fetch "all" + every configured
+   * landing page in parallel — those GETs all miss the now-empty server
+   * cache, recompute fresh, and store. So this single Refresh updates the
+   * cache for every future visitor (incognito or not) until next refresh.
    */
   async function refreshAll() {
     setLoading(true);
     try {
-      /* Make sure we have the landingPages list first. */
+      /* 1. Invalidate server-side data cache. */
+      try { await fetch("/api/dashboard/refresh", { method: "POST", cache: "no-store" }); }
+      catch (e) { console.error("server cache invalidate failed", e); }
+
+      /* 2. Make sure we have the landingPages list. */
       let landing: LandingPage[] = data?.landingPages || [];
       if (!landing.length) {
         const first = await fetchOne(range, "all");
@@ -96,7 +101,8 @@ export default function DashboardPage() {
         const next = { ...cache, [cacheId(range, "all")]: { fetchedAt: Date.now(), payload: first } };
         setCache(next); writeCache(next);
       }
-      /* Now fetch "all" + each page in parallel for the current range. */
+      /* 3. Fetch "all" + each landing page in parallel — server cache is
+         empty so each one triggers a fresh compute, then stores. */
       const pageOptions = ["all", ...landing.map((p) => p.path)];
       const payloads = await Promise.all(pageOptions.map((p) => fetchOne(range, p)));
       const now = Date.now();
@@ -106,7 +112,6 @@ export default function DashboardPage() {
       });
       setCache(next);
       writeCache(next);
-      /* Re-render the currently selected combo from the fresh cache. */
       const current = next[cacheId(range, page)];
       if (current) {
         setData(current.payload);

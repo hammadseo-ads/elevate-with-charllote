@@ -1,20 +1,28 @@
 /**
  * Combined dashboard feed.
- * GET /api/dashboard?range=daily|weekly|monthly|total
+ * GET /api/dashboard?range=daily|weekly|monthly|total&page=all|/pagePath
+ *
+ * Server-side cached for 24h via Next.js unstable_cache. This means the FIRST
+ * visitor that day pays the ~10s API-fetch cost; everyone after (any browser,
+ * any incognito session, any device) gets an instant response from Vercel's
+ * data cache. Cache is keyed by (range, page).
+ *
+ * To force a fresh compute (e.g. after manual data change in Klaviyo):
+ *   POST /api/dashboard/refresh   (invalidates the cache, next GET recomputes)
  *
  * Returns:
- *   ga4:      { totals, bySource }
- *   typeform: { responses }
- *   funnel:   { visitors, quiz_submitters, quiz_finished, checkout_filled, buyers, revenue }
- *   tiers:    { tier269, tier419, tier468, tier618, downsell199, late, friend }
- *   errors:   { ... } when any source fails
+ *   ga4, typeform, funnel, tiers, emailReceived, emailSequence, listIds, errors
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { unstable_cache } from "next/cache";
 import * as klaviyo from "@/lib/klaviyo";
 import * as typeform from "@/lib/typeform";
 import * as ga4 from "@/lib/ga4";
 import { CONFIG } from "@/lib/config";
+
+/** Tag used by /api/dashboard/refresh to invalidate every cached entry. */
+export const DASHBOARD_CACHE_TAG = "dashboard";
 
 export const dynamic = "force-dynamic";
 
@@ -55,7 +63,7 @@ function getRange(range: string) {
   };
 }
 
-/** Helper: count list-or-segment members, returns 0 on error. Tries list first, segment second. */
+/** Helper: count list-or-segment members, returns 0 on error. */
 async function safeCount(id: string, key: string, errors: any): Promise<number> {
   if (!id) return 0;
   try {
@@ -66,15 +74,11 @@ async function safeCount(id: string, key: string, errors: any): Promise<number> 
   }
 }
 
-export async function GET(req: NextRequest) {
-  const range = req.nextUrl.searchParams.get("range") || "weekly";
-  /**
-   * page param controls the GA4 page filter:
-   *   - "all" (default) → use all CONFIG.ga4.landingPages
-   *   - any configured pagePath (URL-decoded) → filter to just that one page
-   * Unknown values fall back to "all" so the dashboard never blows up.
-   */
-  const pageParam   = req.nextUrl.searchParams.get("page") || "all";
+/**
+ * Pure compute function — no req access, deterministic from (range, pageParam).
+ * Wrapped in unstable_cache below so all callers share the same cached output.
+ */
+async function computeDashboard(range: string, pageParam: string) {
   const allLanding  = CONFIG.ga4.landingPages.map((p) => p.path);
   const ga4Pages    = pageParam === "all" || !allLanding.includes(pageParam)
                        ? undefined        // undefined = use all configured pages
@@ -85,12 +89,13 @@ export async function GET(req: NextRequest) {
     range,
     label,
     page: ga4Pages ? ga4Pages[0] : "all",
-    landingPages: CONFIG.ga4.landingPages,   // expose to UI so it can render the picker
+    landingPages: CONFIG.ga4.landingPages,
     ga4: null,
     typeform: null,
     funnel: null,
     tiers: null,
     errors: {},
+    cachedAt: new Date().toISOString(),   // so the UI can show "data from server cache at X"
   };
 
   // --- GA4 ----------------------------------------------------------
@@ -106,9 +111,7 @@ export async function GET(req: NextRequest) {
     }
   })();
 
-  // --- Klaviyo lists -----------------------------------------------
-  // NOTE: Klaviyo list counts are CUMULATIVE (all-time) — they don't shrink
-  // when you switch to "Today / Weekly". Only GA4 + Typeform respect the range.
+  // --- Klaviyo lists + email engagement tracks ----------------------
   const klaviyoPromise = (async () => {
     const errors = out.errors;
     const tier269     = await safeCount(LISTS.buyer269,      "buyer_269",     errors);
@@ -135,7 +138,7 @@ export async function GET(req: NextRequest) {
 
     out.tiers = { tier269, tier419, tier468, tier618, downsell199, late, friend };
     out.funnel = {
-      visitors:         null, // filled after GA4 promise resolves
+      visitors:         null,
       quiz_submitters:  quizSubmitters,
       quiz_finished:    quizFinished,
       checkout_filled:  checkoutFilled,
@@ -143,7 +146,6 @@ export async function GET(req: NextRequest) {
       buyers:           allBuyers || (tier269 + tier419 + tier468 + tier618 + downsell199 + late),
       revenue,
     };
-    /* Expose list IDs so the frontend knows what to fetch when a card is clicked. */
     out.listIds = {
       quiz_submitters: LISTS.quizSubmitters,
       quiz_finished:   LISTS.quizFinished,
@@ -159,10 +161,7 @@ export async function GET(req: NextRequest) {
       late:            LISTS.buyerLate,
     };
 
-    /* --- Email-sequence tracks (Received + Opened) ---
-     * Both run the same "hybrid: segments if filled, else auto-compute from
-     * events" logic. Computed in parallel since they're independent.
-     */
+    /* Email tracks (Received + Opened) — hybrid segment/event-based. */
     async function computeTrack(cfg: any, errorKey: string) {
       const anySegment = cfg.stages.some((s: any) => !!s.segmentId);
       if (anySegment) {
@@ -222,7 +221,6 @@ export async function GET(req: NextRequest) {
   const typeformPromise = (async () => {
     try {
       const count = await typeform.countResponses({
-        // Typeform wants ISO with T: 2024-01-01T00:00:00 (NO space)
         since: startISO.slice(0, 19),
         until: endISO.slice(0, 19),
       });
@@ -234,10 +232,28 @@ export async function GET(req: NextRequest) {
 
   await Promise.all([ga4Promise, klaviyoPromise, typeformPromise]);
 
-  // Stitch GA4 visitors into the funnel object now that both have resolved.
   if (out.funnel && out.ga4?.totals?.users != null) {
     out.funnel.visitors = out.ga4.totals.users;
   }
 
-  return NextResponse.json(out);
+  return out;
+}
+
+/**
+ * Cached wrapper. unstable_cache uses the function arguments + the keyParts
+ * array to derive the cache entry, so each (range, page) combo gets its own
+ * persistent entry in Vercel's data cache. revalidate: 86400 = 24h TTL.
+ * Tag allows POST /api/dashboard/refresh to wipe every entry at once.
+ */
+const getCachedDashboard = unstable_cache(
+  async (range: string, pageParam: string) => computeDashboard(range, pageParam),
+  ["dashboard-v2"],
+  { revalidate: 86400, tags: [DASHBOARD_CACHE_TAG] }
+);
+
+export async function GET(req: NextRequest) {
+  const range     = req.nextUrl.searchParams.get("range") || "weekly";
+  const pageParam = req.nextUrl.searchParams.get("page") || "all";
+  const data = await getCachedDashboard(range, pageParam);
+  return NextResponse.json(data);
 }
