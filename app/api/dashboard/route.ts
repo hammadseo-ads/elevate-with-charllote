@@ -159,32 +159,31 @@ export async function GET(req: NextRequest) {
       late:            LISTS.buyerLate,
     };
 
-    /* --- Email-sequence engagement (7-day welcome flow) ---
-     * Hybrid: if ANY stage has a segmentId, use segment counts. Otherwise
-     * auto-compute by scanning "Opened Email" events from the source list.
+    /* --- Email-sequence tracks (Received + Opened) ---
+     * Both run the same "hybrid: segments if filled, else auto-compute from
+     * events" logic. Computed in parallel since they're independent.
      */
-    const seqCfg = CONFIG.klaviyo.emailSequence;
-    const anySegment = seqCfg.stages.some((s) => !!s.segmentId);
-    if (anySegment) {
-      const seqStages = await Promise.all(
-        seqCfg.stages.map(async (s) => {
-          if (!s.segmentId) return { ...s, count: null, configured: false, mode: "segment" };
-          const count = await safeCount(s.segmentId, `email_day${s.day}`, errors);
-          return { ...s, count, configured: true, mode: "segment" };
-        })
-      );
-      out.emailSequence = { label: seqCfg.label, stages: seqStages, mode: "segment" };
-    } else {
+    async function computeTrack(cfg: any, errorKey: string) {
+      const anySegment = cfg.stages.some((s: any) => !!s.segmentId);
+      if (anySegment) {
+        const stages = await Promise.all(
+          cfg.stages.map(async (s: any) => {
+            if (!s.segmentId) return { ...s, count: null, configured: false, mode: "segment" };
+            const count = await safeCount(s.segmentId, `${errorKey}_day${s.day}`, errors);
+            return { ...s, count, configured: true, mode: "segment" };
+          })
+        );
+        return { label: cfg.label, stages, mode: "segment" };
+      }
       try {
         const engagement = await klaviyo.getEmailEngagement({
-          sourceListId:   seqCfg.sourceListId,
-          metricName:     seqCfg.metricName,
-          subjectPattern: seqCfg.subjectPattern,
-          maxDay:         seqCfg.stages.length,
-          lookbackDays:   seqCfg.lookbackDays,
+          sourceListId:   cfg.sourceListId,
+          metricName:     cfg.metricName,
+          subjectPattern: cfg.subjectPattern,
+          maxDay:         cfg.stages.length,
+          lookbackDays:   cfg.lookbackDays,
         });
-        /* Marry the engagement output back onto the user-facing labels. */
-        const seqStages = seqCfg.stages.map((s) => {
+        const stages = cfg.stages.map((s: any) => {
           const match = engagement.stages.find((e) => e.day === s.day);
           return {
             ...s,
@@ -194,18 +193,29 @@ export async function GET(req: NextRequest) {
             mode:       "events",
           };
         });
-        out.emailSequence = {
-          label:             seqCfg.label,
-          stages:            seqStages,
+        return {
+          label:             cfg.label,
+          stages,
           mode:              "events",
           totalListProfiles: engagement.totalListProfiles,
           totalMatched:      engagement.totalMatched,
         };
       } catch (e: any) {
-        errors.email_sequence = e.message;
-        out.emailSequence = { label: seqCfg.label, stages: seqCfg.stages.map((s) => ({ ...s, count: null, configured: false, mode: "events" })), mode: "events" };
+        errors[errorKey] = e.message;
+        return {
+          label: cfg.label,
+          stages: cfg.stages.map((s: any) => ({ ...s, count: null, configured: false, mode: "events" })),
+          mode: "events",
+        };
       }
     }
+
+    const [emailReceived, emailSequence] = await Promise.all([
+      computeTrack(CONFIG.klaviyo.emailReceived, "email_received"),
+      computeTrack(CONFIG.klaviyo.emailSequence, "email_sequence"),
+    ]);
+    out.emailReceived = emailReceived;
+    out.emailSequence = emailSequence;
   })();
 
   // --- Typeform ----------------------------------------------------

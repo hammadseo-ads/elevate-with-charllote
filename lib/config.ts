@@ -54,6 +54,27 @@ export const CONFIG = {
         { day: 7, label: "Day 7 Opened", segmentId: "" },
       ],
     },
+    /**
+     * Same machinery as emailSequence, but tracks DELIVERY instead of opens.
+     * Renders as a separate section above the Opens section so you can
+     * compare delivery dropoff (bounces / unsubscribes) vs engagement dropoff.
+     */
+    emailReceived: {
+      label:          "7-Day Welcome Flow Delivery",
+      sourceListId:   "X2ib44",
+      metricName:     "Received Email",
+      subjectPattern: "Day\\s*(\\d+)",
+      lookbackDays:   30,
+      stages: [
+        { day: 1, label: "Day 1 Received", segmentId: "" },
+        { day: 2, label: "Day 2 Received", segmentId: "" },
+        { day: 3, label: "Day 3 Received", segmentId: "" },
+        { day: 4, label: "Day 4 Received", segmentId: "" },
+        { day: 5, label: "Day 5 Received", segmentId: "" },
+        { day: 6, label: "Day 6 Received", segmentId: "" },
+        { day: 7, label: "Day 7 Received", segmentId: "" },
+      ],
+    },
     // Prices for revenue calc
     tierPrices: {
       tier269:     269,

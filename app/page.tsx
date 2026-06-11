@@ -276,61 +276,22 @@ export default function DashboardPage() {
         </div>
       </section>
 
+      {/* EMAIL DELIVERY — 7-day welcome flow receives (above Opens for funnel-order) */}
+      {data?.emailReceived && (
+        <EmailTrackSection
+          track={data.emailReceived}
+          metricBlurb={`Auto-computed from "Received Email" events. Each person counted once at their furthest day reached.`}
+          setDrill={setDrill}
+        />
+      )}
+
       {/* EMAIL SEQUENCE ENGAGEMENT — 7-day welcome flow opens */}
       {data?.emailSequence && (
-        <section className="mb-8">
-          <div className="flex items-baseline justify-between mb-3">
-            <h2 className="text-sm uppercase tracking-wider text-muted font-bold">
-              {data.emailSequence.label}
-            </h2>
-            {data.emailSequence.mode === "events" && data.emailSequence.totalListProfiles != null && (
-              <span className="text-[11px] text-muted">
-                {data.emailSequence.totalMatched} of {data.emailSequence.totalListProfiles} matched
-              </span>
-            )}
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-            {(data.emailSequence.stages || []).map((s: any) => {
-              const inlineMode = s.mode === "events";
-              const hasData = s.configured && (inlineMode ? Array.isArray(s.profiles) : !!s.segmentId);
-              const onClick = !hasData ? undefined : (
-                inlineMode
-                  ? () => setDrill({
-                      label: s.label,
-                      /* Adapt {id,email,name} → Klaviyo profile shape the modal expects. */
-                      inlineProfiles: (s.profiles || []).map((p: any) => {
-                        const [first, ...rest] = (p.name || "").split(" ");
-                        return {
-                          id: p.id,
-                          attributes: {
-                            email: p.email,
-                            first_name: first || "",
-                            last_name: rest.join(" "),
-                            properties: {},
-                          },
-                        };
-                      }),
-                    })
-                  : () => setDrill({ listId: s.segmentId, label: s.label })
-              );
-              return (
-                <FunnelStep
-                  key={s.day}
-                  label={s.label}
-                  value={s.configured ? s.count : null}
-                  helper={hasData ? "Click to view" : (s.configured ? "" : "Not configured")}
-                  onClick={onClick}
-                />
-              );
-            })}
-          </div>
-          {data.emailSequence.mode === "events" && (
-            <p className="text-xs text-muted mt-2">
-              Auto-computed from "Opened Email" events. Each person counted once at
-              their furthest day reached.
-            </p>
-          )}
-        </section>
+        <EmailTrackSection
+          track={data.emailSequence}
+          metricBlurb={`Auto-computed from "Opened Email" events. Each person counted once at their furthest day reached.`}
+          setDrill={setDrill}
+        />
       )}
 
       {/* TYPEFORM + GA4 totals */}
@@ -573,6 +534,61 @@ function exportCsv(label: string, profiles: any[]) {
   a.download = `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.csv`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function EmailTrackSection({ track, metricBlurb, setDrill }: any) {
+  return (
+    <section className="mb-8">
+      <div className="flex items-baseline justify-between mb-3">
+        <h2 className="text-sm uppercase tracking-wider text-muted font-bold">
+          {track.label}
+        </h2>
+        {track.mode === "events" && track.totalListProfiles != null && (
+          <span className="text-[11px] text-muted">
+            {track.totalMatched} of {track.totalListProfiles} matched
+          </span>
+        )}
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+        {(track.stages || []).map((s: any) => {
+          const inlineMode = s.mode === "events";
+          const hasData = s.configured && (inlineMode ? Array.isArray(s.profiles) : !!s.segmentId);
+          const onClick = !hasData ? undefined : (
+            inlineMode
+              ? () => setDrill({
+                  label: s.label,
+                  /* Adapt {id,email,name} → Klaviyo profile shape the modal expects. */
+                  inlineProfiles: (s.profiles || []).map((p: any) => {
+                    const [first, ...rest] = (p.name || "").split(" ");
+                    return {
+                      id: p.id,
+                      attributes: {
+                        email: p.email,
+                        first_name: first || "",
+                        last_name: rest.join(" "),
+                        properties: {},
+                      },
+                    };
+                  }),
+                })
+              : () => setDrill({ listId: s.segmentId, label: s.label })
+          );
+          return (
+            <FunnelStep
+              key={s.day}
+              label={s.label}
+              value={s.configured ? s.count : null}
+              helper={hasData ? "Click to view" : (s.configured ? "" : "Not configured")}
+              onClick={onClick}
+            />
+          );
+        })}
+      </div>
+      {track.mode === "events" && (
+        <p className="text-xs text-muted mt-2">{metricBlurb}</p>
+      )}
+    </section>
+  );
 }
 
 function FunnelStep({ label, value, helper, prefix, highlight, onClick }: any) {
