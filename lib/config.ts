@@ -23,23 +23,27 @@ export const CONFIG = {
       buyerLate:       "TxQKsT",   // 48 Hours Before the Session ($495)
     },
     /**
-     * 7-day welcome flow engagement tracking. Each entry is a Klaviyo
-     * SEGMENT that contains profiles who opened that day's email.
-     * Leave segmentId="" and the dashboard hides that card.
+     * 7-day welcome flow engagement. TWO modes:
      *
-     * Setup in Klaviyo (one-time):
-     *   Audience -> Lists & Segments -> Create Segment
-     *     Definition: "What someone has done (or not done)"
-     *     Choose metric: "Opened Email"
-     *     Filter: Subject contains "Day 1"   (or use $message_name / Campaign Name
-     *                                          depending on how your flow emails are tagged)
-     *     Name it: "Opened Day 1 Email"
-     *   Copy the segment ID from the URL (e.g. abc123 from /segment/abc123/...)
+     * MODE A — auto-compute from events (default, no Klaviyo setup needed):
+     *   Leave all `segmentId` empty. The dashboard:
+     *     1. Pulls profiles from `sourceListId`
+     *     2. Pulls all "Opened Email" events in the last `lookbackDays`
+     *     3. Matches each event's subject against `subjectPattern` to extract
+     *        the day number (e.g. "Day 1: Welcome..." → day=1)
+     *     4. Each profile lands in their FURTHEST day reached (one bucket per
+     *        person), so the cards naturally show a dropoff funnel.
      *
-     * Repeat for Days 2-7, paste IDs below.
+     * MODE B — explicit Klaviyo segments (override per stage):
+     *   Fill any `segmentId` and that stage reads from the segment instead.
+     *   Mix-and-match is supported (some stages auto, some segment-backed).
      */
     emailSequence: {
-      label: "7-Day Welcome Flow Engagement",
+      label:          "7-Day Welcome Flow Engagement",
+      sourceListId:   "X2ib44",        // Quiz Submitters list
+      metricName:     "Opened Email",  // Klaviyo metric to match events against
+      subjectPattern: "Day\\s*(\\d+)", // regex (string) — captures day number from subject
+      lookbackDays:   30,              // how far back to scan events
       stages: [
         { day: 1, label: "Day 1 Opened", segmentId: "" },
         { day: 2, label: "Day 2 Opened", segmentId: "" },

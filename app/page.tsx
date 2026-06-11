@@ -4,7 +4,10 @@ import { useEffect, useState } from "react";
 
 type Range = "daily" | "weekly" | "monthly" | "total";
 
-type DrillDown = { listId: string; label: string } | null;
+type DrillDown =
+  | { listId: string; label: string }                  // segment/list-backed
+  | { label: string; inlineProfiles: any[] }           // event-backed (profiles arrive with payload)
+  | null;
 type LandingPage = { path: string; label: string };
 
 /** localStorage key for the in-browser cache. Bump suffix to invalidate. */
@@ -132,9 +135,15 @@ export default function DashboardPage() {
     /* eslint-disable-next-line */
   }, [range, page]);
 
-  /* Load profiles when a drill-down is requested. */
+  /* Load profiles when a drill-down is requested. Two paths:
+     - inlineProfiles in drill payload → use directly (event-computed stages)
+     - listId in drill payload         → fetch from Klaviyo API (segments/lists) */
   useEffect(() => {
     if (!drill) { setProfiles(null); return; }
+    if ("inlineProfiles" in drill) {
+      setProfiles(drill.inlineProfiles || []);
+      return;
+    }
     setDrillLoading(true);
     fetch(`/api/klaviyo/profiles?listId=${drill.listId}&max=500`, { cache: "no-store" })
       .then((r) => r.json())
@@ -270,25 +279,55 @@ export default function DashboardPage() {
       {/* EMAIL SEQUENCE ENGAGEMENT — 7-day welcome flow opens */}
       {data?.emailSequence && (
         <section className="mb-8">
-          <h2 className="text-sm uppercase tracking-wider text-muted font-bold mb-3">
-            {data.emailSequence.label}
-          </h2>
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-            {(data.emailSequence.stages || []).map((s: any) => (
-              <FunnelStep
-                key={s.day}
-                label={s.label}
-                value={s.configured ? s.count : null}
-                helper={s.configured ? (s.segmentId ? "Click to view" : "") : "Not configured"}
-                onClick={s.configured && s.segmentId
-                  ? () => setDrill({ listId: s.segmentId, label: s.label })
-                  : undefined}
-              />
-            ))}
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-sm uppercase tracking-wider text-muted font-bold">
+              {data.emailSequence.label}
+            </h2>
+            {data.emailSequence.mode === "events" && data.emailSequence.totalListProfiles != null && (
+              <span className="text-[11px] text-muted">
+                {data.emailSequence.totalMatched} of {data.emailSequence.totalListProfiles} matched
+              </span>
+            )}
           </div>
-          {(data.emailSequence.stages || []).every((s: any) => !s.configured) && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+            {(data.emailSequence.stages || []).map((s: any) => {
+              const inlineMode = s.mode === "events";
+              const hasData = s.configured && (inlineMode ? Array.isArray(s.profiles) : !!s.segmentId);
+              const onClick = !hasData ? undefined : (
+                inlineMode
+                  ? () => setDrill({
+                      label: s.label,
+                      /* Adapt {id,email,name} → Klaviyo profile shape the modal expects. */
+                      inlineProfiles: (s.profiles || []).map((p: any) => {
+                        const [first, ...rest] = (p.name || "").split(" ");
+                        return {
+                          id: p.id,
+                          attributes: {
+                            email: p.email,
+                            first_name: first || "",
+                            last_name: rest.join(" "),
+                            properties: {},
+                          },
+                        };
+                      }),
+                    })
+                  : () => setDrill({ listId: s.segmentId, label: s.label })
+              );
+              return (
+                <FunnelStep
+                  key={s.day}
+                  label={s.label}
+                  value={s.configured ? s.count : null}
+                  helper={hasData ? "Click to view" : (s.configured ? "" : "Not configured")}
+                  onClick={onClick}
+                />
+              );
+            })}
+          </div>
+          {data.emailSequence.mode === "events" && (
             <p className="text-xs text-muted mt-2">
-              Add Klaviyo segment IDs to <code>CONFIG.klaviyo.emailSequence.stages</code> to populate this section.
+              Auto-computed from "Opened Email" events. Each person counted once at
+              their furthest day reached.
             </p>
           )}
         </section>
@@ -366,8 +405,12 @@ export default function DashboardPage() {
               <div>
                 <h3 className="text-lg font-extrabold">{drill.label}</h3>
                 <p className="text-xs text-white/70 mt-0.5">
-                  List ID: <code className="font-mono">{drill.listId}</code>
-                  {profiles && ` · ${profiles.length} profiles shown (max 500)`}
+                  {"listId" in drill ? (
+                    <>List ID: <code className="font-mono">{drill.listId}</code></>
+                  ) : (
+                    <>Auto-computed from email events</>
+                  )}
+                  {profiles && ` · ${profiles.length} profiles shown`}
                 </p>
               </div>
               <button onClick={() => setDrill(null)}

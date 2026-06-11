@@ -176,3 +176,100 @@ export async function listAllLists(): Promise<{ id: string; name: string; create
     created: l.attributes?.created,
   }));
 }
+
+export type EmailEngagementStage = {
+  day: number;
+  count: number;
+  profiles: { id: string; email: string; name: string }[];
+};
+
+/**
+ * Auto-compute email-sequence engagement from raw events. No segments needed.
+ *
+ * Algorithm:
+ *   1. Pull all profile IDs in `sourceListId` (so we know who to include)
+ *   2. Resolve the metric id for `metricName` (e.g. "Opened Email")
+ *   3. Pull all events for that metric in the last `lookbackDays`
+ *   4. For each event whose profile is in our list, regex-match the Subject
+ *      against `subjectPattern` to extract the day number
+ *   5. Track the FURTHEST day each profile reached
+ *   6. Bucket each profile into exactly one stage (their furthest day)
+ *
+ * Returns one stage per day from 1..maxDay. Profiles who haven't opened any
+ * matching email don't appear in any stage.
+ */
+export async function getEmailEngagement(opts: {
+  sourceListId: string;
+  metricName: string;
+  subjectPattern: string;        // compiled to RegExp here
+  maxDay: number;                // typically 7
+  lookbackDays?: number;
+}): Promise<{
+  stages: EmailEngagementStage[];
+  totalListProfiles: number;
+  totalMatched: number;
+}> {
+  const { sourceListId, metricName, subjectPattern, maxDay, lookbackDays = 30 } = opts;
+
+  /* 1. Profiles in source list — needed both to filter events and to display names. */
+  const listProfiles = await getMembers(sourceListId, 2000);
+  const profileMap = new Map<string, { email: string; name: string }>();
+  listProfiles.forEach((p: any) => {
+    const a = p?.attributes || {};
+    profileMap.set(p.id, {
+      email: a.email || "",
+      name:  [a.first_name, a.last_name].filter(Boolean).join(" ") || "",
+    });
+  });
+
+  /* 2. Resolve metric id by name. */
+  const metrics = await listMetrics();
+  const metric = metrics.find((m) => m.name === metricName);
+  if (!metric) {
+    throw new Error(`Klaviyo metric "${metricName}" not found. Check CONFIG.klaviyo.emailSequence.metricName.`);
+  }
+
+  /* 3. Pull all events for the metric within the lookback window. */
+  const since = new Date(Date.now() - lookbackDays * 86400000).toISOString();
+  const until = new Date().toISOString();
+  const events = await eventsByMetric(metric.id, since, until, 20000);
+
+  /* 4. Match subjects, track furthest day per profile. */
+  const re = new RegExp(subjectPattern, "i");
+  const furthestByProfile = new Map<string, number>();
+
+  events.forEach((e: any) => {
+    const profileId = e?.relationships?.profile?.data?.id;
+    if (!profileId || !profileMap.has(profileId)) return;
+    const subject =
+      e?.attributes?.event_properties?.Subject ||
+      e?.attributes?.event_properties?.subject ||
+      e?.attributes?.event_properties?.["$message_name"] ||
+      "";
+    const m = subject.match(re);
+    if (!m) return;
+    const day = parseInt(m[1], 10);
+    if (!Number.isInteger(day) || day < 1 || day > maxDay) return;
+    const current = furthestByProfile.get(profileId) || 0;
+    if (day > current) furthestByProfile.set(profileId, day);
+  });
+
+  /* 5. Bucket by furthest day. */
+  const stages: EmailEngagementStage[] = [];
+  for (let day = 1; day <= maxDay; day++) {
+    const profiles: EmailEngagementStage["profiles"] = [];
+    furthestByProfile.forEach((furthest, profileId) => {
+      if (furthest === day) {
+        const p = profileMap.get(profileId)!;
+        profiles.push({ id: profileId, email: p.email, name: p.name });
+      }
+    });
+    stages.push({ day, count: profiles.length, profiles });
+  }
+
+  return {
+    stages,
+    totalListProfiles: profileMap.size,
+    totalMatched: furthestByProfile.size,
+  };
+}

@@ -160,18 +160,52 @@ export async function GET(req: NextRequest) {
     };
 
     /* --- Email-sequence engagement (7-day welcome flow) ---
-     * Each stage points at a Klaviyo SEGMENT. Empty segmentId = not configured
-     * yet, the UI will show "—" instead of a count.
+     * Hybrid: if ANY stage has a segmentId, use segment counts. Otherwise
+     * auto-compute by scanning "Opened Email" events from the source list.
      */
     const seqCfg = CONFIG.klaviyo.emailSequence;
-    const seqStages = await Promise.all(
-      seqCfg.stages.map(async (s) => {
-        if (!s.segmentId) return { ...s, count: null, configured: false };
-        const count = await safeCount(s.segmentId, `email_day${s.day}`, errors);
-        return { ...s, count, configured: true };
-      })
-    );
-    out.emailSequence = { label: seqCfg.label, stages: seqStages };
+    const anySegment = seqCfg.stages.some((s) => !!s.segmentId);
+    if (anySegment) {
+      const seqStages = await Promise.all(
+        seqCfg.stages.map(async (s) => {
+          if (!s.segmentId) return { ...s, count: null, configured: false, mode: "segment" };
+          const count = await safeCount(s.segmentId, `email_day${s.day}`, errors);
+          return { ...s, count, configured: true, mode: "segment" };
+        })
+      );
+      out.emailSequence = { label: seqCfg.label, stages: seqStages, mode: "segment" };
+    } else {
+      try {
+        const engagement = await klaviyo.getEmailEngagement({
+          sourceListId:   seqCfg.sourceListId,
+          metricName:     seqCfg.metricName,
+          subjectPattern: seqCfg.subjectPattern,
+          maxDay:         seqCfg.stages.length,
+          lookbackDays:   seqCfg.lookbackDays,
+        });
+        /* Marry the engagement output back onto the user-facing labels. */
+        const seqStages = seqCfg.stages.map((s) => {
+          const match = engagement.stages.find((e) => e.day === s.day);
+          return {
+            ...s,
+            count:      match ? match.count : 0,
+            profiles:   match ? match.profiles : [],
+            configured: true,
+            mode:       "events",
+          };
+        });
+        out.emailSequence = {
+          label:             seqCfg.label,
+          stages:            seqStages,
+          mode:              "events",
+          totalListProfiles: engagement.totalListProfiles,
+          totalMatched:      engagement.totalMatched,
+        };
+      } catch (e: any) {
+        errors.email_sequence = e.message;
+        out.emailSequence = { label: seqCfg.label, stages: seqCfg.stages.map((s) => ({ ...s, count: null, configured: false, mode: "events" })), mode: "events" };
+      }
+    }
   })();
 
   // --- Typeform ----------------------------------------------------
