@@ -158,6 +158,20 @@ export async function GET(req: NextRequest) {
       downsell:        LISTS.buyerDownsell,
       late:            LISTS.buyerLate,
     };
+
+    /* --- Email-sequence engagement (7-day welcome flow) ---
+     * Each stage points at a Klaviyo SEGMENT. Empty segmentId = not configured
+     * yet, the UI will show "—" instead of a count.
+     */
+    const seqCfg = CONFIG.klaviyo.emailSequence;
+    const seqStages = await Promise.all(
+      seqCfg.stages.map(async (s) => {
+        if (!s.segmentId) return { ...s, count: null, configured: false };
+        const count = await safeCount(s.segmentId, `email_day${s.day}`, errors);
+        return { ...s, count, configured: true };
+      })
+    );
+    out.emailSequence = { label: seqCfg.label, stages: seqStages };
   })();
 
   // --- Typeform ----------------------------------------------------

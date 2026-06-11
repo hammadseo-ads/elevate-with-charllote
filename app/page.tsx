@@ -267,6 +267,33 @@ export default function DashboardPage() {
         </div>
       </section>
 
+      {/* EMAIL SEQUENCE ENGAGEMENT — 7-day welcome flow opens */}
+      {data?.emailSequence && (
+        <section className="mb-8">
+          <h2 className="text-sm uppercase tracking-wider text-muted font-bold mb-3">
+            {data.emailSequence.label}
+          </h2>
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+            {(data.emailSequence.stages || []).map((s: any) => (
+              <FunnelStep
+                key={s.day}
+                label={s.label}
+                value={s.configured ? s.count : null}
+                helper={s.configured ? (s.segmentId ? "Click to view" : "") : "Not configured"}
+                onClick={s.configured && s.segmentId
+                  ? () => setDrill({ listId: s.segmentId, label: s.label })
+                  : undefined}
+              />
+            ))}
+          </div>
+          {(data.emailSequence.stages || []).every((s: any) => !s.configured) && (
+            <p className="text-xs text-muted mt-2">
+              Add Klaviyo segment IDs to <code>CONFIG.klaviyo.emailSequence.stages</code> to populate this section.
+            </p>
+          )}
+        </section>
+      )}
+
       {/* TYPEFORM + GA4 totals */}
       <section className="mb-8">
         <h2 className="text-sm uppercase tracking-wider text-muted font-bold mb-3">Range-filtered totals</h2>
