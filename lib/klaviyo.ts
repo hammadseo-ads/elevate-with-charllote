@@ -158,13 +158,23 @@ export async function eventsByMetric(
   return out;
 }
 
-/** List all metrics so you can find the ID of "Placed Order" / "Started Checkout" / etc. */
+/**
+ * List all metrics so you can find the ID of "Opened Email" / "Placed Order" /
+ * "Started Checkout" / etc. The /metrics/ endpoint does NOT accept page[size]
+ * (unlike other Klaviyo resources). It uses cursor pagination only — but the
+ * default page is large enough (~50 metrics) for our needs, so we follow links.
+ */
 export async function listMetrics(): Promise<{ id: string; name: string }[]> {
-  const data: any = await get(`/metrics/?page[size]=100`);
-  return (data?.data || []).map((m: any) => ({
-    id: m.id,
-    name: m.attributes?.name,
-  }));
+  const out: { id: string; name: string }[] = [];
+  let next: string | null = `/metrics/`;
+  while (next) {
+    const data: any = await get(next);
+    (data?.data || []).forEach((m: any) =>
+      out.push({ id: m.id, name: m.attributes?.name })
+    );
+    next = data?.links?.next || null;
+  }
+  return out;
 }
 
 /** List all lists so the dashboard can offer them as filters. */
