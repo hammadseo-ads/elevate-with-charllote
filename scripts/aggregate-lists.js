@@ -23,6 +23,7 @@ const path = require("node:path");
 const LISTS_DIR       = path.join(__dirname, "..", "klaviyo-export", "lists");
 const OUT_ALL         = path.join(__dirname, "..", "klaviyo-export", "all-people-combined.csv");
 const OUT_EXCEPT_QUIZ = path.join(__dirname, "..", "klaviyo-export", "all-people-except-quiz.csv");
+const OUT_ONLY_QUIZ   = path.join(__dirname, "..", "klaviyo-export", "all-people-only-quiz.csv");
 
 /* Quiz list IDs to exclude from the "except-quiz" output. */
 const QUIZ_LIST_IDS = new Set(["QVkNKH", "X2ib44"]);
@@ -177,12 +178,25 @@ const csv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const exceptLines = [headers.join(","), ...exceptQuiz.map(toRow)];
   fs.writeFileSync(OUT_EXCEPT_QUIZ, exceptLines.join("\n") + "\n", "utf8");
 
+  /* Include ONLY people in at least one quiz list (inverse of except-quiz). */
+  const onlyQuiz = all.filter((e) => {
+    for (const quizId of QUIZ_LIST_IDS) if (e.in_list_ids.has(quizId)) return true;
+    return false;
+  });
+
+  const onlyLines = [headers.join(","), ...onlyQuiz.map(toRow)];
+  fs.writeFileSync(OUT_ONLY_QUIZ, onlyLines.join("\n") + "\n", "utf8");
+
   console.log(`Combined (all):       ${all.length.toLocaleString().padStart(7)} profiles`);
   console.log(`  → ${OUT_ALL}`);
   console.log("");
   console.log(`Except quiz lists:    ${exceptQuiz.length.toLocaleString().padStart(7)} profiles`);
   console.log(`  (excluded ${(all.length - exceptQuiz.length).toLocaleString()} quiz submitters from QVkNKH + X2ib44)`);
   console.log(`  → ${OUT_EXCEPT_QUIZ}`);
+  console.log("");
+  console.log(`Only quiz lists:      ${onlyQuiz.length.toLocaleString().padStart(7)} profiles`);
+  console.log(`  (people in QVkNKH + X2ib44, deduped across the two)`);
+  console.log(`  → ${OUT_ONLY_QUIZ}`);
 })().catch((e) => {
   console.error("FAILED:", e.message);
   process.exit(1);
