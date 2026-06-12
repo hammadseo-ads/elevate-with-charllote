@@ -35,6 +35,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Exported PII (Klaviyo profile dumps from scripts/extract-emails.js)
+# Exported PII (Klaviyo profile dumps from scripts/*.js)
 klaviyo-export.csv
 *.export.csv
+/klaviyo-export/
