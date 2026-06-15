@@ -653,13 +653,84 @@ function normalize(s) {
     .replace(/[^a-z]/g, "");                             // letters only
 }
 
-/* Pull a likely first name out of an email prefix (before @, before . or _ or +). */
-function nameFromEmail(email) {
+/* Generic / role-account local-parts that never carry a personal name. */
+const GENERIC_EMAILS = new Set([
+  "info","admin","hello","contact","support","sales","office","team","hr","marketing",
+  "noreply","no-reply","donotreply","webmaster","postmaster","me","mail","email","main",
+  "work","home","service","help","feedback","general","reception","accounts","accounting",
+  "billing","orders","newsletter","subscriptions","press","media","careers","jobs","ceo",
+  "owner","manager","director","admin1","admin2","test","user","guest","anonymous",
+]);
+
+/* Try LOTS of patterns to extract a recognizable first name from an email.
+   Examples that should resolve:
+     mary.smith@gmail.com         → mary    (split on dot)
+     marysmith@gmail.com          → mary    (prefix match)
+     mary_jones83@hotmail.com     → mary    (strip _ and digits)
+     bensmith@outlook.com         → ben     (prefix match)
+     smithmary@hotmail.com        → mary    (suffix match)
+     kimberlyj@yahoo.com          → kimberly (prefix match)
+     m.johnson@gmail.com          → none    (single letter discarded)
+     info@somesite.com            → none    (generic)
+   Returns { gender, guess } on hit, or null. */
+function emailGenderLookup(email) {
+  if (!email || !email.includes("@")) return null;
+  const local = email.split("@")[0].toLowerCase();
+  if (GENERIC_EMAILS.has(local)) return null;
+
+  /* 1. Strip leading/trailing non-letters, then split on common separators. */
+  const cleaned = local.replace(/^[^a-z]+|[^a-z]+$/g, "");
+  const fragments = cleaned.split(/[._+\-]+/).filter(Boolean);
+
+  /* Helper: matches a candidate name against the dictionaries. */
+  const match = (cand) => {
+    if (!cand || cand.length < 3) return null;
+    if (AMBIGUOUS.has(cand)) return null;
+    if (FEMALE.has(cand)) return { gender: "female", guess: cand };
+    if (MALE.has(cand))   return { gender: "male",   guess: cand };
+    return null;
+  };
+
+  /* 2. Try each fragment as a whole name (after stripping embedded digits). */
+  for (const frag of fragments) {
+    const noNum = frag.replace(/\d+/g, "");
+    const hit = match(noNum);
+    if (hit) return hit;
+  }
+
+  /* 3. Prefix match — for fragments where the name is glued onto a surname.
+        Rule: matched name must be >= 4 chars AND leave >= 2 chars remainder,
+        which avoids "sam" matching inside "samantha". Prefer LONGEST match. */
+  for (const frag of fragments) {
+    const noNum = frag.replace(/\d+/g, "");
+    if (noNum.length < 6) continue;
+    for (let len = Math.min(noNum.length - 2, 12); len >= 4; len--) {
+      const cand = noNum.slice(0, len);
+      const hit = match(cand);
+      if (hit) return hit;
+    }
+  }
+
+  /* 4. Suffix match — e.g. "smithmary" → "mary". Same length rules. */
+  for (const frag of fragments) {
+    const noNum = frag.replace(/\d+/g, "");
+    if (noNum.length < 6) continue;
+    for (let len = Math.min(noNum.length - 2, 12); len >= 4; len--) {
+      const cand = noNum.slice(noNum.length - len);
+      const hit = match(cand);
+      if (hit) return hit;
+    }
+  }
+
+  return null;
+}
+
+/* Kept for the diagnostic `guess` field — returns the raw first-fragment guess
+   so unknowns still show *something* useful for the operator to scan. */
+function emailFirstFragment(email) {
   if (!email || !email.includes("@")) return "";
-  const prefix = email.split("@")[0];
-  /* Common patterns: "mary.smith", "mary_smith", "marys", "mary+tag", "mary123" */
-  const first = prefix.split(/[._+\-]/)[0];
-  return normalize(first);
+  const local = email.split("@")[0].toLowerCase().replace(/^[^a-z]+|[^a-z]+$/g, "");
+  return local.split(/[._+\-]+/)[0].replace(/\d+/g, "");
 }
 
 /* Slavic / Eastern European surname endings carry gender. Cheap extra signal
@@ -697,13 +768,14 @@ function classify(firstName, lastName, email) {
       return { gender: surnameGender, source: "surname_ending", guess: normalize(lastName) };
     }
   }
-  /* 4) fall back to email prefix */
-  const en = nameFromEmail(email);
-  if (en && !AMBIGUOUS.has(en)) {
-    if (FEMALE.has(en)) return { gender: "female", source: "email_prefix", guess: en };
-    if (MALE.has(en))   return { gender: "male",   source: "email_prefix", guess: en };
+  /* 4) Aggressive email lookup — splits on multiple separators, strips digits,
+        does prefix + suffix matching to find embedded names like
+        "marysmith83@" → mary or "smithben@" → ben. */
+  const emailHit = emailGenderLookup(email);
+  if (emailHit) {
+    return { gender: emailHit.gender, source: "email_match", guess: emailHit.guess };
   }
-  return { gender: "unknown", source: "", guess: fn || normalize(lastName) || en || "" };
+  return { gender: "unknown", source: "", guess: fn || normalize(lastName) || emailFirstFragment(email) || "" };
 }
 
 /* ---------- main ---------- */
@@ -735,7 +807,7 @@ function classify(firstName, lastName, email) {
     if (source === "first_name")      counts.by_first_name++;
     if (source === "last_name")       counts.by_last_name++;
     if (source === "surname_ending")  counts.by_surname_ending++;
-    if (source === "email_prefix")    counts.by_email++;
+    if (source === "email_match")     counts.by_email++;
 
     /* Append the two diagnostic columns. */
     const outRow = [...row, source, guess].map(csv).join(",");
@@ -760,5 +832,5 @@ function classify(firstName, lastName, email) {
   console.log(`Classified by first_name:     ${counts.by_first_name.toLocaleString()}`);
   console.log(`Classified by last_name:      ${counts.by_last_name.toLocaleString()}  (used when first_name is missing or a single letter)`);
   console.log(`Classified by surname ending: ${counts.by_surname_ending.toLocaleString()}  (Slavic -ova/-ska etc.)`);
-  console.log(`Classified by email prefix:   ${counts.by_email.toLocaleString()}`);
+  console.log(`Classified by email match:    ${counts.by_email.toLocaleString()}  (prefix + suffix matching with digit stripping)`);
 })();
