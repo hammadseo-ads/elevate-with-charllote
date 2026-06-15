@@ -433,13 +433,18 @@ const MALE = new Set([
   "yasin","yves","zach","zachary","zaheer","zaire","zayn","zayd","zeke","zion",
 ]);
 
-/* Some names that are commonly unisex — intentionally NOT classified to either set.
-   Profiles with these names go to the "unknown" file for manual review. */
+/* Truly unisex names that should stay unknown. Names the user has explicitly
+   assigned to female or male have been moved into the FEMALE/MALE sets below. */
 const AMBIGUOUS = new Set([
-  "alex","alexis","jordan","jamie","casey","taylor","morgan","cameron","riley","sam",
-  "pat","robin","quinn","drew","dana","kelly","lee","kris","blake","jaden",
-  "phoenix","sage","rowan","skyler","skylar","ash","kim","terry","tracy","reese",
+  "alexis","casey","cameron","riley","pat","quinn","drew","kris","blake","jaden",
+  "phoenix","sage","rowan","skyler","skylar","terry","tracy","reese",
 ]);
+
+/* User-specified gender overrides (June 2026). Force-add to the right sets. */
+const FORCE_FEMALE = ["dana","lee","robin","ash","nat"];
+const FORCE_MALE   = ["alex","kelly","sam","kim","taylor","morgan","jordan","jamie"];
+FORCE_FEMALE.forEach((n) => FEMALE.add(n));
+FORCE_MALE.forEach((n) => MALE.add(n));
 
 /* ---------- minimal CSV parser ---------- */
 function parseRow(line) {
@@ -482,20 +487,48 @@ function nameFromEmail(email) {
   return normalize(first);
 }
 
-function classify(firstName, email) {
+/* Slavic / Eastern European surname endings carry gender. Cheap extra signal
+   for entries where first_name is missing or a single letter. */
+function gendersFromSurname(lastName) {
+  const ln = normalize(lastName);
+  if (!ln || ln.length < 4) return null;
+  /* Female endings */
+  if (/(ova|eva|ina|aya|ska|cka|enko|ova|aia|i?eva)$/.test(ln)) return "female";
+  /* Male endings — kept narrow so we don't catch random English surnames */
+  if (/(ovsky|owski|inski|kovich|owicz|ovich|ovsky)$/.test(ln)) return "male";
+  return null;
+}
+
+function classify(firstName, lastName, email) {
   /* 1) try the first_name column */
   const fn = normalize(firstName);
   if (fn && !AMBIGUOUS.has(fn)) {
     if (FEMALE.has(fn)) return { gender: "female", source: "first_name", guess: fn };
     if (MALE.has(fn))   return { gender: "male",   source: "first_name", guess: fn };
   }
-  /* 2) fall back to email prefix */
+  /* 2) if first_name is empty OR a single letter / initial-only, try LAST NAME
+     as if it were a first name (people often fill the name in the wrong field,
+     or use a recognized first name as their surname). */
+  const fnIsInitial = !fn || fn.length <= 1;
+  if (fnIsInitial) {
+    const ln = normalize(lastName);
+    if (ln && ln.length > 1 && !AMBIGUOUS.has(ln)) {
+      if (FEMALE.has(ln)) return { gender: "female", source: "last_name", guess: ln };
+      if (MALE.has(ln))   return { gender: "male",   source: "last_name", guess: ln };
+    }
+    /* 3) Slavic surname ending heuristic */
+    const surnameGender = gendersFromSurname(lastName);
+    if (surnameGender) {
+      return { gender: surnameGender, source: "surname_ending", guess: normalize(lastName) };
+    }
+  }
+  /* 4) fall back to email prefix */
   const en = nameFromEmail(email);
   if (en && !AMBIGUOUS.has(en)) {
     if (FEMALE.has(en)) return { gender: "female", source: "email_prefix", guess: en };
     if (MALE.has(en))   return { gender: "male",   source: "email_prefix", guess: en };
   }
-  return { gender: "unknown", source: "", guess: fn || en || "" };
+  return { gender: "unknown", source: "", guess: fn || normalize(lastName) || en || "" };
 }
 
 /* ---------- main ---------- */
@@ -513,17 +546,21 @@ function classify(firstName, email) {
   const outHeaders = [...headers, "gender_source", "name_guess"];
 
   const buckets = { female: [], male: [], unknown: [] };
-  const counts  = { female: 0, male: 0, unknown: 0, by_first_name: 0, by_email: 0 };
+  const counts  = { female: 0, male: 0, unknown: 0,
+                     by_first_name: 0, by_last_name: 0, by_surname_ending: 0, by_email: 0 };
 
   for (let i = 1; i < lines.length; i++) {
     const row = parseRow(lines[i]);
     const firstName = row[col.first_name] || "";
+    const lastName  = row[col.last_name]  || "";
     const email     = row[col.email]      || "";
-    const { gender, source, guess } = classify(firstName, email);
+    const { gender, source, guess } = classify(firstName, lastName, email);
 
     counts[gender]++;
-    if (source === "first_name")   counts.by_first_name++;
-    if (source === "email_prefix") counts.by_email++;
+    if (source === "first_name")      counts.by_first_name++;
+    if (source === "last_name")       counts.by_last_name++;
+    if (source === "surname_ending")  counts.by_surname_ending++;
+    if (source === "email_prefix")    counts.by_email++;
 
     /* Append the two diagnostic columns. */
     const outRow = [...row, source, guess].map(csv).join(",");
@@ -545,6 +582,8 @@ function classify(firstName, email) {
   console.log(`Male:     ${counts.male.toLocaleString().padStart(7)} (${pct(counts.male)})  → all-people-males.csv`);
   console.log(`Unknown:  ${counts.unknown.toLocaleString().padStart(7)} (${pct(counts.unknown)})  → all-people-unknown-gender.csv`);
   console.log("");
-  console.log(`Classified by first_name:   ${counts.by_first_name.toLocaleString()}`);
-  console.log(`Classified by email prefix: ${counts.by_email.toLocaleString()}`);
+  console.log(`Classified by first_name:     ${counts.by_first_name.toLocaleString()}`);
+  console.log(`Classified by last_name:      ${counts.by_last_name.toLocaleString()}  (used when first_name is missing or a single letter)`);
+  console.log(`Classified by surname ending: ${counts.by_surname_ending.toLocaleString()}  (Slavic -ova/-ska etc.)`);
+  console.log(`Classified by email prefix:   ${counts.by_email.toLocaleString()}`);
 })();
