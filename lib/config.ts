@@ -104,6 +104,7 @@ export const CONFIG = {
     landingPages: [
       { path: "/back-in-the-body-in-8-weeks/", label: "8-Weeks Page" },
       { path: "/back-in-the-body-in-8/",       label: "Short Page"   },
+      { path: "/reset-optin/",                 label: "Quiz Opt-In"  },
     ],
   },
 };
