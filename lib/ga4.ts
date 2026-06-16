@@ -80,22 +80,37 @@ function propertyPath(): string {
 }
 
 /**
- * Build a GA4 dimensionFilter restricting results to one or more landing pages.
+ * Build a GA4 dimensionFilter combining:
+ *   1. Restrict to one or more landing pages (pagePath inList)
+ *   2. Exclude configured countries (country NOT inList)
  *
- * @param pagesOverride  Optional array of page paths to use instead of the full
- *                       list from CONFIG. Pass a single-element array to filter
- *                       to one specific page. Pass undefined to use all
- *                       configured landing pages.
+ * Returned shape depends on what's present:
+ *   - both filters → andGroup
+ *   - one filter   → that filter alone
+ *   - neither      → undefined (no filter, GA4 returns site-wide)
  */
 function landingPageFilter(pagesOverride?: string[]) {
+  const filters: any[] = [];
+
   const pages = pagesOverride ?? (CONFIG.ga4.landingPages || []).map((p) => p.path);
-  if (!pages.length) return undefined;
-  return {
-    filter: {
-      fieldName: "pagePath",
-      inListFilter: { values: pages },
-    },
-  };
+  if (pages.length) {
+    filters.push({
+      filter: { fieldName: "pagePath", inListFilter: { values: pages } },
+    });
+  }
+
+  const excluded = (CONFIG.ga4 as any).excludedCountries || [];
+  if (excluded.length) {
+    filters.push({
+      notExpression: {
+        filter: { fieldName: "country", inListFilter: { values: excluded } },
+      },
+    });
+  }
+
+  if (filters.length === 0) return undefined;
+  if (filters.length === 1) return filters[0];
+  return { andGroup: { expressions: filters } };
 }
 
 /** Run a custom GA4 report. */

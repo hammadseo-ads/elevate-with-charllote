@@ -93,6 +93,13 @@ export const CONFIG = {
   ga4: {
     propertyId: "522083775",   // Elevatewithcharlotte
     /**
+     * Countries to EXCLUDE from every GA4 query (dashboard + landing-page picker).
+     * Useful for filtering out the dev/agency location so the numbers reflect
+     * real customer traffic. Add more by name as needed — GA4 uses the country
+     * full name (e.g. "Pakistan", not "PK") in the `country` dimension.
+     */
+    excludedCountries: ["Pakistan"],
+    /**
      * Restrict the dashboard's GA4 numbers (visitors + traffic source) to ONLY
      * sessions that hit one of these landing pages. The dashboard UI shows a
      * picker built from this list so the user can filter to one page at a time.
