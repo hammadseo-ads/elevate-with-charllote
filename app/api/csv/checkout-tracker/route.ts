@@ -47,62 +47,24 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    /* Fetch all three lists/segments + metrics in parallel. */
-    const metricsPromise = fetch("https://a.klaviyo.com/api/metrics/", {
-      headers: {
-        Authorization: `Klaviyo-API-Key ${process.env.KLAVIYO_PRIVATE_KEY}`,
-        revision: "2024-07-15",
-        Accept: "application/json",
-      },
-    }).then((r) => r.json());
-
-    const [checkout, buyers, abandoned, metricsResp] = await Promise.all([
+    /* Fetch all three lists/segments in parallel. */
+    const [checkout, buyers, abandoned] = await Promise.all([
       klaviyo.getMembers(LIST_CHECKOUT,  5000),
       klaviyo.getMembers(LIST_BUYERS,    5000),
       klaviyo.getMembers(LIST_ABANDONED, 5000),
-      metricsPromise,
     ]);
 
-    /* Find the metric ids we care about so we can pull their event dates. */
-    const allMetrics = metricsResp?.data || [];
-    const paidMetricId     = allMetrics.find((m: any) => m.attributes?.name === "Successfully Paid")?.id;
-    const checkoutMetricId = allMetrics.find((m: any) => m.attributes?.name === "Started Checkout")?.id;
+    /* Klaviyo's list/segment profiles endpoint returns `joined_group_at`
+       as a top-level profile attribute — this is the EXACT timestamp that
+       Klaviyo's UI shows in the "Date added" column. One map per list so
+       we can pick the right one based on the profile's Tag below. */
+    const checkoutJoinedAt  = new Map<string, string>();
+    const buyerJoinedAt     = new Map<string, string>();
+    const abandonedJoinedAt = new Map<string, string>();
 
-    /* Per-profile dates: most recent Successfully Paid + Started Checkout in
-       the last 365 days. Used to fill the "Date" column with the actual
-       action timestamp (when they paid / when they filled the form), instead
-       of the profile's original Klaviyo creation date (which can be years off). */
-    const sinceISO = new Date(Date.now() - 365 * 86400000).toISOString();
-    const paidDates     = new Map<string, string>();
-    const checkoutDates = new Map<string, string>();
-
-    const fetchEventDates = async (metricId: string | undefined, target: Map<string, string>) => {
-      if (!metricId) return;
-      const filter = `and(equals(metric_id,"${metricId}"),greater-or-equal(datetime,${sinceISO}))`;
-      let url: string | null = `https://a.klaviyo.com/api/events/?filter=${encodeURIComponent(filter)}&page[size]=100&sort=-datetime`;
-      while (url) {
-        const resp: any = await fetch(url, {
-          headers: {
-            Authorization: `Klaviyo-API-Key ${process.env.KLAVIYO_PRIVATE_KEY}`,
-            revision: "2024-07-15",
-            Accept: "application/json",
-          },
-        }).then((r) => r.json());
-        for (const ev of resp?.data || []) {
-          const pid = ev?.relationships?.profile?.data?.id;
-          if (!pid) continue;
-          const dt: string = ev?.attributes?.datetime || "";
-          const current = target.get(pid);
-          if (!current || dt > current) target.set(pid, dt);
-        }
-        url = resp?.links?.next || null;
-      }
-    };
-
-    await Promise.all([
-      fetchEventDates(paidMetricId, paidDates),
-      fetchEventDates(checkoutMetricId, checkoutDates),
-    ]);
+    for (const p of checkout)  if (p?.attributes?.joined_group_at) checkoutJoinedAt.set(p.id, p.attributes.joined_group_at);
+    for (const p of buyers)    if (p?.attributes?.joined_group_at) buyerJoinedAt.set(p.id, p.attributes.joined_group_at);
+    for (const p of abandoned) if (p?.attributes?.joined_group_at) abandonedJoinedAt.set(p.id, p.attributes.joined_group_at);
 
     /* Lowercased email sets for fast Tag lookup. */
     const buyerEmails    = new Set<string>();
@@ -137,15 +99,15 @@ export async function GET(req: NextRequest) {
       if (buyerEmails.has(email))         tag = "Purchaser";    // Purchaser wins
       else if (abandonedEmails.has(email)) tag = "Abandoned";
 
-      /* Pick the most meaningful date for this row:
-           - Purchaser → "Successfully Paid" event date (when they paid)
-           - Abandoned/Pending → "Started Checkout" event date (when they
-             filled the form, which is what Klaviyo's segment UI shows as
-             "Date added")
-           - Fallbacks: v3 popup submitted_at, then Klaviyo profile created. */
+      /* Use the joined_group_at from the list/segment that matches the tag —
+         this is the exact "Date added" timestamp Klaviyo shows in the UI.
+         Falls back to submitted_at / a.created if for some reason
+         joined_group_at is missing (e.g. profile in pool but not in any
+         of the three lists we tracked). */
       const dateValue =
-        (tag === "Purchaser" ? paidDates.get(p.id) : "") ||
-        checkoutDates.get(p.id) ||
+        (tag === "Purchaser" ? buyerJoinedAt.get(p.id)     : "") ||
+        (tag === "Abandoned" ? abandonedJoinedAt.get(p.id) : "") ||
+        checkoutJoinedAt.get(p.id) ||
         x.submitted_at ||
         a.created ||
         "";
