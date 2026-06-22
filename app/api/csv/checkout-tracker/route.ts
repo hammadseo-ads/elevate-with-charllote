@@ -76,7 +76,7 @@ export async function GET(req: NextRequest) {
     const paidDates     = new Map<string, string>();
     const checkoutDates = new Map<string, string>();
 
-    async function fetchEventDates(metricId: string | undefined, target: Map<string, string>) {
+    const fetchEventDates = async (metricId: string | undefined, target: Map<string, string>) => {
       if (!metricId) return;
       const filter = `and(equals(metric_id,"${metricId}"),greater-or-equal(datetime,${sinceISO}))`;
       let url: string | null = `https://a.klaviyo.com/api/events/?filter=${encodeURIComponent(filter)}&page[size]=100&sort=-datetime`;
@@ -97,7 +97,7 @@ export async function GET(req: NextRequest) {
         }
         url = resp?.links?.next || null;
       }
-    }
+    };
 
     await Promise.all([
       fetchEventDates(paidMetricId, paidDates),
