@@ -1,22 +1,25 @@
 /**
- * POST /api/dashboard/refresh
+ * POST /api/dashboard/refresh[?section=ga4|funnel|emailReceived|emailOpened]
  *
- * Invalidates the server-side dashboard cache so the next GET /api/dashboard
- * call re-fetches live from Klaviyo + Typeform + GA4. Called by the
- * dashboard's Refresh button.
- *
- * Returns immediately — the actual recompute happens on the next GET call.
- * The frontend follows this POST with parallel GETs for each (range, page)
- * combo, repopulating the cache so subsequent users get fresh data instantly.
+ * Invalidates the server-side cache. Without ?section it wipes EVERYTHING
+ * (every section). With ?section it wipes only that section so a refresh
+ * of one slow part doesn't blow away other sections that are still warm.
  */
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
-import { DASHBOARD_CACHE_TAG } from "../route";
+import { DASHBOARD_TAGS } from "../route";
 
 export const dynamic = "force-dynamic";
 
-export async function POST() {
-  revalidateTag(DASHBOARD_CACHE_TAG);
-  return NextResponse.json({ ok: true, invalidatedTag: DASHBOARD_CACHE_TAG, at: new Date().toISOString() });
+export async function POST(req: NextRequest) {
+  const section = req.nextUrl.searchParams.get("section") || "";
+  const tag = (DASHBOARD_TAGS as Record<string, string>)[section] || DASHBOARD_TAGS.all;
+  revalidateTag(tag);
+  return NextResponse.json({
+    ok: true,
+    invalidatedTag: tag,
+    section: section || "ALL",
+    at: new Date().toISOString(),
+  });
 }

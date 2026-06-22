@@ -34,6 +34,9 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(false);
   const [cache, setCache] = useState<Cache>({});       // hydrated from localStorage on mount
   const [lastFetched, setLastFetched] = useState<number | null>(null);
+  /* Per-section loading flags so each section can show its own spinner
+     when its individual refresh button is clicked. */
+  const [sectionLoading, setSectionLoading] = useState<Record<string, boolean>>({});
 
   /* Drill-down modal state */
   const [drill, setDrill] = useState<DrillDown>(null);
@@ -77,6 +80,50 @@ export default function DashboardPage() {
       setLastFetched(Date.now());
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
+  }
+
+  /**
+   * Refresh ONE section: invalidate just that section's server cache,
+   * re-fetch only that section, merge result into the existing payload.
+   * Way faster than refreshAll when you only need updated tiers, or only
+   * updated email engagement, etc.
+   *
+   * section names match the backend route's section keys:
+   *   "ga4" | "funnel" | "emailReceived" | "emailOpened"
+   */
+  async function refreshSection(section: string) {
+    setSectionLoading((prev) => ({ ...prev, [section]: true }));
+    try {
+      /* 1. Invalidate the section's server cache. */
+      await fetch(`/api/dashboard/refresh?section=${section}`, { method: "POST", cache: "no-store" })
+        .catch((e) => console.error("section refresh invalidate failed", e));
+
+      /* 2. Fetch ONLY that section for the current (range, page). */
+      const url = `/api/dashboard?range=${range}&page=${encodeURIComponent(page)}&sections=${section}`;
+      const res = await fetch(url, { cache: "no-store" });
+      const partial = await res.json();
+
+      /* 3. Merge partial into existing data + update funnel.visitors if ga4 came back. */
+      const merged: any = { ...(data || {}), ...partial };
+      if (merged.funnel && merged.ga4?.totals?.users != null) {
+        merged.funnel = { ...merged.funnel, visitors: merged.ga4.totals.users };
+      }
+      /* Carry over errors map merging — partial errors should add, not replace. */
+      merged.errors = { ...(data?.errors || {}), ...(partial?.errors || {}) };
+
+      setData(merged);
+      setLastFetched(Date.now());
+
+      /* 4. Write merged result back to localStorage so other tabs / reload still benefits. */
+      const key = cacheId(range, page);
+      const next = { ...cache, [key]: { fetchedAt: Date.now(), payload: merged } };
+      setCache(next);
+      writeCache(next);
+    } catch (e) {
+      console.error(`refreshSection(${section}) failed`, e);
+    } finally {
+      setSectionLoading((prev) => ({ ...prev, [section]: false }));
+    }
   }
 
   /**
@@ -240,7 +287,13 @@ export default function DashboardPage() {
 
       {/* FUNNEL */}
       <section className="mb-8">
-        <h2 className="text-sm uppercase tracking-wider text-muted font-bold mb-3">Acquisition Funnel</h2>
+        <SectionHeader
+          title="Acquisition Funnel"
+          section="funnel"
+          loading={!!sectionLoading.funnel}
+          onRefresh={() => refreshSection("funnel")}
+        />
+        {/* visitors number comes from ga4 so it gets a smaller spinner too */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
           <FunnelStep label="Visitors"        value={f.visitors}        helper="GA4 (range-filtered)" />
           <FunnelStep label="Quiz Submitters" value={f.quiz_submitters} helper="Click to view"
@@ -262,7 +315,12 @@ export default function DashboardPage() {
 
       {/* TIER BREAKDOWN */}
       <section className="mb-8">
-        <h2 className="text-sm uppercase tracking-wider text-muted font-bold mb-3">Buyers by Tier</h2>
+        <SectionHeader
+          title="Buyers by Tier"
+          section="funnel"
+          loading={!!sectionLoading.funnel}
+          onRefresh={() => refreshSection("funnel")}
+        />
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
           <Kpi label="$269 Basic"    value={t.tier269}     accent="bg-mint"
             onClick={() => ids.tier269 && setDrill({ listId: ids.tier269, label: "$269 Basic Buyers" })} />
@@ -287,6 +345,9 @@ export default function DashboardPage() {
           track={data.emailReceived}
           metricBlurb={`Auto-computed from "Received Email" events. Each person counted once at their furthest day reached.`}
           setDrill={setDrill}
+          section="emailReceived"
+          loading={!!sectionLoading.emailReceived}
+          onRefresh={() => refreshSection("emailReceived")}
         />
       )}
 
@@ -296,12 +357,20 @@ export default function DashboardPage() {
           track={data.emailSequence}
           metricBlurb={`Auto-computed from "Opened Email" events. Each person counted once at their furthest day reached.`}
           setDrill={setDrill}
+          section="emailOpened"
+          loading={!!sectionLoading.emailOpened}
+          onRefresh={() => refreshSection("emailOpened")}
         />
       )}
 
       {/* TYPEFORM + GA4 totals */}
       <section className="mb-8">
-        <h2 className="text-sm uppercase tracking-wider text-muted font-bold mb-3">Range-filtered totals</h2>
+        <SectionHeader
+          title="Range-filtered totals"
+          section="ga4"
+          loading={!!sectionLoading.ga4}
+          onRefresh={() => refreshSection("ga4")}
+        />
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Kpi label="Sessions"     value={data?.ga4?.totals?.sessions}  />
           <Kpi label="Visitors"     value={data?.ga4?.totals?.users}     />
@@ -312,7 +381,12 @@ export default function DashboardPage() {
 
       {/* Traffic source */}
       <section className="mb-8">
-        <h2 className="text-sm uppercase tracking-wider text-muted font-bold mb-3">Traffic by source (GA4)</h2>
+        <SectionHeader
+          title="Traffic by source (GA4)"
+          section="ga4"
+          loading={!!sectionLoading.ga4}
+          onRefresh={() => refreshSection("ga4")}
+        />
         <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-mint">
@@ -541,13 +615,45 @@ function exportCsv(label: string, profiles: any[]) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-function EmailTrackSection({ track, metricBlurb, setDrill }: any) {
+/**
+ * Section heading with a tiny refresh button. Re-used across Funnel,
+ * Tiers, Range-totals, and Traffic-by-source — all of which the user
+ * may want to refresh independently of the slow email sections.
+ */
+function SectionHeader({ title, loading, onRefresh, rightSlot }: any) {
+  return (
+    <div className="flex items-center justify-between mb-3 gap-2">
+      <div className="flex items-center gap-2">
+        <h2 className="text-sm uppercase tracking-wider text-muted font-bold">{title}</h2>
+        {onRefresh && (
+          <button onClick={onRefresh} disabled={loading}
+            title="Refresh just this section"
+            className="text-[11px] px-2 py-0.5 rounded-full bg-white border border-gray-200 text-muted hover:bg-mint hover:text-navy disabled:opacity-50">
+            {loading ? "…" : "↻"}
+          </button>
+        )}
+      </div>
+      {rightSlot && <div>{rightSlot}</div>}
+    </div>
+  );
+}
+
+function EmailTrackSection({ track, metricBlurb, setDrill, section, loading, onRefresh }: any) {
   return (
     <section className="mb-8">
-      <div className="flex items-baseline justify-between mb-3">
-        <h2 className="text-sm uppercase tracking-wider text-muted font-bold">
-          {track.label}
-        </h2>
+      <div className="flex items-baseline justify-between mb-3 gap-2">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm uppercase tracking-wider text-muted font-bold">
+            {track.label}
+          </h2>
+          {onRefresh && (
+            <button onClick={onRefresh} disabled={loading}
+              title={`Refresh this section (re-scans 30 days of email events)`}
+              className="text-[11px] px-2 py-0.5 rounded-full bg-white border border-gray-200 text-muted hover:bg-mint hover:text-navy disabled:opacity-50">
+              {loading ? "…" : "↻"}
+            </button>
+          )}
+        </div>
         {track.mode === "events" && track.totalListProfiles != null && (
           <span className="text-[11px] text-muted">
             {track.totalMatched} of {track.totalListProfiles} matched
