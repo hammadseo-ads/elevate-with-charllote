@@ -65,11 +65,11 @@ export async function GET(req: NextRequest) {
        in the pool are appended — covers edge cases where someone made it
        into the buyer or abandoned set without going through the popup. */
     const pool = new Map<string, any>();
-    function add(p: any) {
+    const add = (p: any) => {
       const email = (p?.attributes?.email || "").toLowerCase();
       if (!email) return;
       if (!pool.has(email)) pool.set(email, p);
-    }
+    };
     checkout.forEach(add);
     buyers.forEach(add);
     abandoned.forEach(add);
