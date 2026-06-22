@@ -74,7 +74,9 @@ export async function GET(req: NextRequest) {
     buyers.forEach(add);
     abandoned.forEach(add);
 
-    const headers = ["Email", "First Name", "Last Name", "Phone", "WhatsApp", "Tag", "Created", "Profile ID"];
+    /* Date column appended at the END so adding it doesn't shift any
+       existing column positions (existing IMPORTDATA formulas keep working). */
+    const headers = ["Email", "First Name", "Last Name", "Phone", "WhatsApp", "Tag", "Created", "Profile ID", "Submitted At"];
 
     const rows = Array.from(pool.values()).map((p: any) => {
       const a = p?.attributes || {};
@@ -85,6 +87,11 @@ export async function GET(req: NextRequest) {
       if (buyerEmails.has(email))         tag = "Purchaser";    // Purchaser wins
       else if (abandonedEmails.has(email)) tag = "Abandoned";
 
+      /* Prefer submitted_at (set by our v3 popup at form-fill time) — that's
+         when this person actually started checkout. Falls back to Klaviyo
+         profile-created date for older profiles that pre-date the popup. */
+      const dateValue = x.submitted_at || a.created || "";
+
       return [
         a.email || "",
         a.first_name || "",
@@ -94,6 +101,7 @@ export async function GET(req: NextRequest) {
         tag,
         a.created || "",
         p.id,
+        dateValue,
       ];
     });
 
