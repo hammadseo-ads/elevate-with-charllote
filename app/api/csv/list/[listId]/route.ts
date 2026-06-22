@@ -122,9 +122,16 @@ export async function GET(
       ];
     });
 
-    /* Sort by submitted_at desc (newest first) so the top of the sheet
-       is the hottest leads. */
-    rows.sort((a, b) => String(b[12] || "").localeCompare(String(a[12] || "")));
+    /* Sort by Klaviyo profile id ASC. Profile IDs are ULID-style (chronological)
+       so this is "oldest-first" — but more importantly, the sort is STABLE
+       across refreshes: new leads always append at the BOTTOM, never reorder
+       existing rows. This lets the Google Sheet user type manual notes
+       (Instagram handle, etc.) into columns NEXT to a row, and the notes
+       stay correctly aligned with that row even after IMPORTDATA refreshes.
+       For newest-first BROWSING, use a Sheets "Filter View" sorted by
+       Submitted At descending — it changes display order without touching
+       the underlying data, so manual notes still align. */
+    rows.sort((a, b) => String(a[25] || "").localeCompare(String(b[25] || "")));
 
     const csv = [headers.join(","), ...rows.map((r) => r.map(csvCell).join(","))].join("\n") + "\n";
 
